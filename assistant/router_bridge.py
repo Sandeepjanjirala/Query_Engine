@@ -50,7 +50,7 @@ def route_command_to_handler(command: dict) -> Callable[[Dict[str, Any]], Dict[s
             'group_dimension': command.get('group_by'),
             'agg': command.get('agg'),
             'n': command.get('n'),
-            'ascending': command.get('ascending'),
+            'ascending': command.get('ascending', False),
         }
         return make_handler(run_group_metric_aggregate, params)
 
