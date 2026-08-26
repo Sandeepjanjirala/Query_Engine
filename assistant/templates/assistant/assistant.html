@@ -1,0 +1,22 @@
+# Assistant Django app templates
+{% extends "base.html" %}
+{% block content %}
+<h1>AI Analytics Assistant</h1>
+<form method="post">
+  {% csrf_token %}
+  <textarea name="question" rows="3" cols="60" placeholder="Enter your analytics question...">{{ question|default:"" }}</textarea><br>
+  <button type="submit">Ask</button>
+</form>
+<hr>
+{% if error %}
+  <div style="color: red;">{{ error }}</div>
+{% endif %}
+{% if command %}
+  <h3>Structured Command</h3>
+  <pre>{{ command|json_script:"cmd" }}</pre>
+{% endif %}
+{% if answer %}
+  <h3>Answer</h3>
+  <div>{{ answer|safe }}</div>
+{% endif %}
+{% endblock %}
