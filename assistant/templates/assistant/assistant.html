@@ -1,6 +1,10 @@
-# Assistant Django app templates
-{% extends "base.html" %}
-{% block content %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>AI Analytics Assistant</title>
+</head>
+<body>
 <h1>AI Analytics Assistant</h1>
 <form method="post">
   {% csrf_token %}
@@ -19,4 +23,5 @@
   <h3>Answer</h3>
   <div>{{ answer|safe }}</div>
 {% endif %}
-{% endblock %}
+</body>
+</html>
