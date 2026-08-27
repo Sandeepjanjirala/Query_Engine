@@ -24,6 +24,15 @@ _RANK_ASC_KEYWORDS = ('bottom', 'lowest', 'least', 'smallest', 'minimum', 'min',
 _RANK_KEYWORDS = _RANK_DESC_KEYWORDS + _RANK_ASC_KEYWORDS
 
 _METRIC_KEYWORDS: list[tuple[tuple[str, ...], str]] = [
+    (('current year zero paid fee due', 'zero paid fee due', 'cy zero paid fee due', 'cy_zp_fd'), 'CY_ZP_FD'),
+    (('fee paid but books not purchased', 'fee paid books not purchased', 'fp bn', 'cy_fp_bn'), 'CY_FP_BN'),
+    (('fee not paid and books not purchased', 'fee not paid & books not purchased', 'fee not paid books not purchased', 'fn bn', 'cy_fn_bn'), 'CY_FN_BN'),
+    (('last year fee due count', 'last year due count', '2024-25 fee due count', 'ly fee due count', 'ly_fdc'), 'LY_FDC'),
+    (('2025-26 live student due count', '2025-26 due count', 'live student due count', 'current year due count', 'cy due count', 'due count', 'cy_a_fdc'), 'CY_A_FDC'),
+    (('last year fee due', '2024-25 fee due', 'ly fee due', 'ly_fd'), 'LY_FD'),
+    (('2025-26 actual zero paid', 'actual zero paid count', 'actual zero paid', 'cy_a_zp'), 'CY_A_ZP'),
+    (('cy zero paid count', 'actual zero paid count', 'zero paid count', 'zero paid', 'cy_zp'), 'CY_ZP'),
+    (('2025-26 live student fee due', 'live student fee due', 'current year fee due', 'fee due', 'cy_a_fd'), 'CY_A_FD'),
     (('net strength difference', 'nsd'), 'NSD'),
     (('strength difference', 'sd'), 'SD'),
     (('dropout percentage', 'dropouts percentage', 'drop out percentage',

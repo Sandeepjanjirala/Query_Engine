@@ -47,7 +47,8 @@ class AssistantStage1Tests(unittest.TestCase):
 
     def _patch_llm_adapter(self):
         """Patch LLMAdapter to return our dummy adapter."""
-        return mock.patch.object(llm_mod, "LLMAdapter", lambda *args, **kwargs: self.dummy_adapter)
+        return mock.patch("assistant.ai.command_parser.LLMAdapter", lambda *args, **kwargs: self.dummy_adapter)
+
 
     def test_parse_question_success(self):
         with self._patch_llm_adapter():
@@ -90,11 +91,12 @@ class AssistantStage1Tests(unittest.TestCase):
     def test_assistant_invalid_json_handling(self):
         bad_adapter = DummyLLMAdapter()
         bad_adapter.set_response("Bad question", "not a json")
-        with mock.patch.object(llm_mod, "LLMAdapter", lambda *args, **kwargs: bad_adapter):
+        with mock.patch("assistant.ai.command_parser.LLMAdapter", lambda *args, **kwargs: bad_adapter):
             response = self.client.post(reverse('assistant'), {"question": "Bad question"})
             self.assertEqual(response.status_code, 200)
             content = response.content.decode()
             self.assertIn("Failed to parse LLM response as JSON", content)
+
 
 if __name__ == "__main__":
     unittest.main()

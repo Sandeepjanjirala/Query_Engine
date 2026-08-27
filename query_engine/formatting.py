@@ -1,6 +1,5 @@
-from __future__ import annotations
-
 from .glossary import ABBREVIATIONS
+from .metric_registry import get_default_metric_registry
 
 _EXTRA_LABELS = {
     'Avg-SPS': 'Average Students Per Section',
@@ -10,6 +9,9 @@ _EXTRA_LABELS = {
 
 
 def _metric_label(metric: str) -> str:
+    spec = get_default_metric_registry().get(metric)
+    if spec:
+        return spec.display_name
     return ABBREVIATIONS.get(metric) or _EXTRA_LABELS.get(metric, metric)
 
 

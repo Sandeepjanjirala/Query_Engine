@@ -24,13 +24,37 @@ class LLMAdapter:
                 {"role": "user", "content": user_prompt},
             ],
             "options": {"temperature": 0.0},
+            "stream": False,
+            "format": "json",
         }
         try:
             logger.debug("Sending request to Ollama: %s", payload)
-            resp = requests.post(self.api_url, json=payload, timeout=10)
+            resp = requests.post(self.api_url, json=payload, timeout=30)
             resp.raise_for_status()
-            data = resp.json()
-            # Ollama returns a dict with a 'message' key containing the response.
-            return data.get("message", {}).get("content", "").strip()
+            
+            raw_text = resp.text.strip()
+            logger.debug("Ollama response status: %s, raw text: %s", resp.status_code, raw_text)
+
+            # Try single JSON parse
+            try:
+                data = json.loads(raw_text)
+                return data.get("message", {}).get("content", "").strip()
+            except json.JSONDecodeError:
+                # Fallback for NDJSON streaming if returned unexpectedly
+                chunks = []
+                for line in raw_text.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        line_data = json.loads(line)
+                        content = line_data.get("message", {}).get("content", "")
+                        if content:
+                            chunks.append(content)
+                    except json.JSONDecodeError:
+                        continue
+                if chunks:
+                    return "".join(chunks).strip()
+                raise
         except Exception as exc:
             raise RuntimeError(f"LLM request failed: {exc}")

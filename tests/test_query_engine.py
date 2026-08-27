@@ -46,15 +46,17 @@ class AnalyticsTests(SimpleTestCase):
         self.assertIsNone(route_question('What is the weather today?'))
 
 
+from query_engine.orchestrator import clear_caches, get_dataframe, get_metric_index
+
+
 class APITests(SimpleTestCase):
     def tearDown(self):
-        get_dataframe.cache_clear()
-        get_metric_index.cache_clear()
+        clear_caches()
 
     @override_settings(BRANCH_ANALYTICS_FILE=Path(__file__).resolve().parent.parent / 'test_branch_analytics.xlsx')
     def test_query_endpoint_v1(self):
-        get_dataframe.cache_clear()
-        get_metric_index.cache_clear()
+        clear_caches()
+
         path = Path(__file__).resolve().parent.parent / 'test_branch_analytics.xlsx'
         pd.DataFrame({
             'Branch': ['A', 'B', 'C', 'D', 'E', 'F'],
@@ -74,13 +76,11 @@ class APITests(SimpleTestCase):
             self.assertEqual(response.data['data'][0]['branch'], 'D')
         finally:
             path.unlink(missing_ok=True)
-            get_dataframe.cache_clear()
-            get_metric_index.cache_clear()
+            clear_caches()
 
     @override_settings(BRANCH_ANALYTICS_FILE=Path(__file__).resolve().parent.parent / 'test_branch_analytics.xlsx')
     def test_query_endpoint_yoy(self):
-        get_dataframe.cache_clear()
-        get_metric_index.cache_clear()
+        clear_caches()
         path = Path(__file__).resolve().parent.parent / 'test_branch_analytics.xlsx'
         pd.DataFrame({
             'Branch': ['A', 'B', 'C', 'D', 'E', 'F'],
@@ -100,5 +100,5 @@ class APITests(SimpleTestCase):
             self.assertIsInstance(response.data['data'], list)
         finally:
             path.unlink(missing_ok=True)
-            get_dataframe.cache_clear()
-            get_metric_index.cache_clear()
+            clear_caches()
+

@@ -16,7 +16,6 @@ from .analytics import (
     top_5_dropout_branches,
     year_over_year_ranking,
 )
-from .filters import apply_filter_context
 from .formatting import (
     format_branch_lookup,
     format_branch_scorecard,
@@ -34,7 +33,12 @@ from .formatting import (
     format_year_over_year,
 )
 from .glossary import GROUP_COLUMNS, ROOM_METRICS
+from .metric_registry import get_default_metric_registry
 from .pandas_tools import build_metric_index, load_excel, resolve_column
+from .query_planner import get_prepared_dataframe
+
+
+from .dataset_loader import clear_dataset_cache
 
 
 @lru_cache(maxsize=1)
@@ -43,15 +47,26 @@ def get_dataframe():
     return load_excel(settings.BRANCH_ANALYTICS_FILE, settings.BRANCH_ANALYTICS_SHEET)
 
 
+def clear_caches():
+    get_dataframe.cache_clear()
+    get_metric_index.cache_clear()
+    clear_dataset_cache()
+
+
+
 @lru_cache(maxsize=1)
 def get_metric_index():
     """Process-level cache of the (level, type, year, metric) -> column map."""
     return build_metric_index(get_dataframe())
 
 
+def _empty_result(function_name: str, answer: str):
+    return {'function': function_name, 'answer': answer, 'data': []}
+
+
 def run_top_5_dropout(context: dict | None = None):
     """V1 pre-function: top 5 branches with highest CY-DPP."""
-    df = apply_filter_context(get_dataframe(), context)
+    df = get_prepared_dataframe(['CY-DPP'], context)
     results = top_5_dropout_branches(df)
     return {
         'function': 'top_5_dropout_branches',
@@ -60,22 +75,29 @@ def run_top_5_dropout(context: dict | None = None):
     }
 
 
-def _empty_result(function_name: str, answer: str):
-    return {'function': function_name, 'answer': answer, 'data': []}
-
-
 def run_rank_branches_by_metric(params: dict, context: dict | None = None):
     """Top/bottom-N branches by any metric/level/type/year combination."""
     metric = params.get('metric') or 'CY-DPP'
-    column = resolve_column(
-        get_metric_index(), metric, params.get('level'), params.get('type'), params.get('year', 'CY')
-    )
+    spec = get_default_metric_registry().get(metric)
+    m_key = spec.metric_id if spec else metric
+    df = get_prepared_dataframe([m_key], context)
+
+    index = build_metric_index(df)
+    column = None
+    if spec and spec.source_column in df.columns:
+        column = spec.source_column
+    elif metric in df.columns:
+        column = metric
+    else:
+        column = resolve_column(
+            index, metric, params.get('level'), params.get('type'), params.get('year', 'CY')
+        )
+
     if column is None:
         return _empty_result(
             'rank_branches_by_metric',
             f"No data column is available for the requested metric ({metric}).",
         )
-    df = apply_filter_context(get_dataframe(), context)
     results = rank_branches_by_metric(df, column, n=params.get('n', 5), ascending=params.get('ascending', False))
     return {
         'function': 'rank_branches_by_metric',
@@ -86,11 +108,16 @@ def run_rank_branches_by_metric(params: dict, context: dict | None = None):
 
 def run_branch_metric_lookup(params: dict, context: dict | None = None):
     """Value(s) of one or more metrics for one, several, or all branches."""
-    index = get_metric_index()
     metrics = params.get('metrics') or [params.get('metric') or 'CY-DPP']
+    df = get_prepared_dataframe(metrics, context)
+    index = build_metric_index(df)
+
     columns = []
     for m in metrics:
-        if m in get_dataframe().columns:
+        spec = get_default_metric_registry().get(m)
+        if spec and spec.source_column in df.columns:
+            columns.append(spec.source_column)
+        elif m in df.columns:
             columns.append(m)
         else:
             col = resolve_column(index, m, params.get('level'), params.get('type'), params.get('year', 'CY'))
@@ -102,7 +129,6 @@ def run_branch_metric_lookup(params: dict, context: dict | None = None):
             'branch_metric_lookup',
             f"No data column is available for the requested metrics.",
         )
-    df = apply_filter_context(get_dataframe(), context)
     results = lookup_branch_metrics(df, columns, branches=params.get('branches'))
     return {
         'function': 'branch_metric_lookup',
@@ -115,16 +141,26 @@ def run_group_metric_aggregate(params: dict, context: dict | None = None):
     """Sum/average/count of a metric grouped by Zone, AGM, or RI."""
     group_column = GROUP_COLUMNS.get(params['group_dimension'])
     metric = params.get('metric') or 'DP'
-    metric_column = resolve_column(
-        get_metric_index(), metric, params.get('level'), params.get('type'), params.get('year', 'CY')
-    )
+    spec = get_default_metric_registry().get(metric)
+    m_key = spec.metric_id if spec else metric
+    df = get_prepared_dataframe([m_key], context)
+
+    metric_column = None
+    if spec and spec.source_column in df.columns:
+        metric_column = spec.source_column
+    elif metric in df.columns:
+        metric_column = metric
+    else:
+        metric_column = resolve_column(
+            build_metric_index(df), metric, params.get('level'), params.get('type'), params.get('year', 'CY')
+        )
+
     if group_column is None or metric_column is None:
         return _empty_result(
             'group_metric_aggregate',
             f"No data column is available for the requested metric ({metric}).",
         )
     agg = params.get('agg', 'mean' if metric in ('DPP', 'STR', 'Avg-SPS') else 'sum')
-    df = apply_filter_context(get_dataframe(), context)
     results = aggregate_by_group(
         df, group_column, metric_column, agg=agg, n=params.get('n'), ascending=params.get('ascending', False)
     )
@@ -145,7 +181,11 @@ def run_year_over_year_change_ranking(params: dict, context: dict | None = None)
     sort_by = params.get('sort_by', 'absolute' if direction == 'absolute' else 'change')
     ascending = params.get('ascending', direction == 'negative')
 
-    index = get_metric_index()
+    spec = get_default_metric_registry().get(metric)
+    m_key = spec.metric_id if spec else metric
+    df = get_prepared_dataframe([m_key], context)
+
+    index = build_metric_index(df)
     cy_column = resolve_column(index, metric, level, type_, 'CY')
     ly_column = resolve_column(index, metric, level, type_, 'LY')
     if cy_column is None or ly_column is None or cy_column == ly_column:
@@ -153,7 +193,6 @@ def run_year_over_year_change_ranking(params: dict, context: dict | None = None)
             'year_over_year_change_ranking',
             f"No current-year/last-year data is available for the requested metric ({metric}).",
         )
-    df = apply_filter_context(get_dataframe(), context)
     results = year_over_year_ranking(
         df, cy_column, ly_column, n=n, ascending=ascending, sort_by=sort_by
     )
@@ -174,8 +213,9 @@ def run_filter_by_threshold(params: dict, context: dict | None = None):
     count_only = params.get('count_only', False)
     group_dimension = params.get('group_dimension')
 
-    index = get_metric_index()
-    df = apply_filter_context(get_dataframe(), context)
+    spec = get_default_metric_registry().get(metric)
+    m_key = spec.metric_id if spec else metric
+    df = get_prepared_dataframe([m_key], context)
 
     if metric == 'vacancy_rate':
         nocr = pd.to_numeric(df['NOCR'], errors='coerce').fillna(0)
@@ -190,7 +230,14 @@ def run_filter_by_threshold(params: dict, context: dict | None = None):
             'data': results['records'] if not count_only else [{'count': results['count']}],
         }
 
-    column = resolve_column(index, metric, level, type_, params.get('year', 'CY'))
+    column = None
+    if spec and spec.source_column in df.columns:
+        column = spec.source_column
+    elif metric in df.columns:
+        column = metric
+    else:
+        column = resolve_column(build_metric_index(df), metric, level, type_, params.get('year', 'CY'))
+
     if column is None:
         return _empty_result('filter_by_threshold', f'No column available for {metric}.')
 
@@ -218,8 +265,10 @@ def run_compare_dimensions(params: dict, context: dict | None = None):
     top = params.get('top')
     group_column = GROUP_COLUMNS.get(group_dimension) if group_dimension else None
 
-    df = apply_filter_context(get_dataframe(), context)
-    index = get_metric_index()
+    spec = get_default_metric_registry().get(metric)
+    m_key = spec.metric_id if spec else metric
+    df = get_prepared_dataframe([m_key], context)
+    index = build_metric_index(df)
 
     if dimension_type == 'level':
         if year == 'yoy' or params.get('direction') in ('positive', 'negative'):
@@ -298,7 +347,7 @@ def run_compare_dimensions(params: dict, context: dict | None = None):
 
 def run_calculate_room_ratio(params: dict, context: dict | None = None):
     """Calculate room occupancy percentage or vacancy percentage across branches."""
-    df = apply_filter_context(get_dataframe(), context)
+    df = get_prepared_dataframe(['NOOR', 'NOVR', 'NOCR'], context)
     ratio_type = params.get('ratio_type', 'occupancy')
     n = params.get('n')
     ascending = params.get('ascending')
@@ -313,8 +362,11 @@ def run_calculate_room_ratio(params: dict, context: dict | None = None):
 def run_scope_total(params: dict, context: dict | None = None):
     """Calculate overall total for a metric across current filter scope."""
     metric = params.get('metric') or 'NOOR'
-    column = resolve_column(get_metric_index(), metric) or metric
-    df = apply_filter_context(get_dataframe(), context)
+    spec = get_default_metric_registry().get(metric)
+    m_key = spec.metric_id if spec else metric
+    df = get_prepared_dataframe([m_key], context)
+
+    column = spec.source_column if spec and spec.source_column in df.columns else (resolve_column(build_metric_index(df), metric) or metric)
     if column not in df.columns:
         return _empty_result('scope_total', f'Column not found for {metric}.')
     val = aggregate_metric_total(df, column, agg='sum')
@@ -327,7 +379,8 @@ def run_scope_total(params: dict, context: dict | None = None):
 
 def run_staff_count_summary(params: dict, context: dict | None = None):
     """Staff count breakdown for one branch or all filtered branches."""
-    index = get_metric_index()
+    df = get_prepared_dataframe(['SC'], context)
+    index = build_metric_index(df)
     columns = []
     if params.get('staff_category'):
         col = resolve_column(index, 'SC', params['staff_category'], None, params.get('year', 'CY'))
@@ -346,7 +399,6 @@ def run_staff_count_summary(params: dict, context: dict | None = None):
     if not columns:
         return _empty_result('staff_count_summary', 'No staff count data is available for the current filters.')
 
-    df = apply_filter_context(get_dataframe(), context)
     results = lookup_branch_metrics(df, columns, branches=params.get('branches'))
     return {
         'function': 'staff_count_summary',
@@ -357,13 +409,13 @@ def run_staff_count_summary(params: dict, context: dict | None = None):
 
 def run_room_utilization_snapshot(params: dict, context: dict | None = None):
     """NOCR/NOOR/NOVR/ARCS for one branch or all filtered branches."""
-    index = get_metric_index()
+    df = get_prepared_dataframe(['NOCR', 'NOOR', 'NOVR', 'ARCS'], context)
+    index = build_metric_index(df)
     metrics = [params['metric']] if params.get('metric') in ROOM_METRICS else list(ROOM_METRICS)
     columns = [c for c in (resolve_column(index, m) for m in metrics) if c]
     if not columns:
         return _empty_result('room_utilization_snapshot', 'No room utilization data is available.')
 
-    df = apply_filter_context(get_dataframe(), context)
     results = lookup_branch_metrics(df, columns, branches=params.get('branches'))
     return {
         'function': 'room_utilization_snapshot',
@@ -374,7 +426,8 @@ def run_room_utilization_snapshot(params: dict, context: dict | None = None):
 
 def run_sections_and_sps_snapshot(params: dict, context: dict | None = None):
     """NOS / Avg-SPS for one or all filtered branches."""
-    index = get_metric_index()
+    df = get_prepared_dataframe(['NOS', 'Avg-SPS'], context)
+    index = build_metric_index(df)
     columns = []
     for metric in ('NOS', 'Avg-SPS'):
         col = resolve_column(index, metric, params.get('level'))
@@ -383,7 +436,6 @@ def run_sections_and_sps_snapshot(params: dict, context: dict | None = None):
     if not columns:
         return _empty_result('sections_and_sps_snapshot', 'No sections/SPS data is available.')
 
-    df = apply_filter_context(get_dataframe(), context)
     results = lookup_branch_metrics(df, columns, branches=params.get('branches'))
     return {
         'function': 'sections_and_sps_snapshot',
@@ -395,11 +447,14 @@ def run_sections_and_sps_snapshot(params: dict, context: dict | None = None):
 def run_strength_difference_ranking(params: dict, context: dict | None = None):
     """Branches ranked by SD or NSD."""
     metric = params.get('metric') or 'NSD'
-    column = resolve_column(get_metric_index(), metric, params.get('level'))
+    spec = get_default_metric_registry().get(metric)
+    m_key = spec.metric_id if spec else metric
+    df = get_prepared_dataframe([m_key], context)
+
+    column = resolve_column(build_metric_index(df), metric, params.get('level'))
     if column is None:
         return _empty_result('strength_difference_ranking', f'No data column is available for {metric}.')
 
-    df = apply_filter_context(get_dataframe(), context)
     results = rank_branches_by_metric(df, column, n=params.get('n', 5), ascending=params.get('ascending', False))
     return {
         'function': 'strength_difference_ranking',
@@ -410,11 +465,11 @@ def run_strength_difference_ranking(params: dict, context: dict | None = None):
 
 def run_branch_scorecard(params: dict, context: dict | None = None):
     """Composite multi-metric snapshot for one branch."""
-    index = get_metric_index()
     metrics = ['GS', 'NS', 'DPP', 'STR', 'NOS', 'SC'] + list(ROOM_METRICS)
+    df = get_prepared_dataframe(metrics, context)
+    index = build_metric_index(df)
     columns = [c for c in (resolve_column(index, m, params.get('level'), None, 'CY') for m in metrics) if c]
 
-    df = apply_filter_context(get_dataframe(), context)
     context_branches = [b for b in (context or {}).get('branches', []) if str(b).strip().casefold() != 'all']
     branches = params.get('branches') or context_branches
     results = lookup_branch_metrics(df, columns, branches=branches or None)

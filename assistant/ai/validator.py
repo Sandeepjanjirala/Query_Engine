@@ -1,5 +1,6 @@
 import logging
 from query_engine.glossary import ABBREVIATIONS
+from query_engine.metric_registry import get_default_metric_registry
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ def validate_command(command: dict) -> str | None:
         metric = command.get('metric')
         if not metric:
             return "Missing required field 'metric' for the requested operation."
-        if metric not in ABBREVIATIONS:
+        if metric not in ABBREVIATIONS and get_default_metric_registry().get(metric) is None:
             return f"Metric '{metric}' is not recognized by the analytics engine."
-    # Additional checks can be added here as needed.
     return None
+
