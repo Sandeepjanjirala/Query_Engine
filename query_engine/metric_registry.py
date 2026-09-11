@@ -13,6 +13,14 @@ class MetricSpec:
     data_type: str = 'numeric'  # 'numeric', 'count', 'currency', 'percentage'
     default_agg: str = 'sum'
     aliases: List[str] = field(default_factory=list)
+    metric_type: str = 'additive'  # 'additive', 'derived'
+    aggregation_rule: str = 'sum'  # 'sum', 'count', 'mean', 'derived'
+    numerator_metric: Optional[str] = None
+    denominator_metric: Optional[str] = None
+    kpi_direction: str = 'positive'  # 'positive' (higher=better), 'negative' (lower=better)
+    supports_comparison: bool = False
+    current_year_col: Optional[str] = None
+    previous_year_col: Optional[str] = None
 
 
 class MetricRegistry:
@@ -62,6 +70,7 @@ def register_default_metrics():
         display_name='2025-26 Live Student Fee Due',
         data_type='currency',
         default_agg='sum',
+        kpi_direction='negative',
         aliases=['fee due', '2025-26 live student fee due', 'live student fee due', 'current year fee due', 'live student due', 'cy_a_fd'],
     ))
 
@@ -72,6 +81,7 @@ def register_default_metrics():
         display_name='2024-25 Fee Due',
         data_type='currency',
         default_agg='sum',
+        kpi_direction='negative',
         aliases=['last year fee due', '2024-25 fee due', 'ly fee due', 'ly_fd'],
     ))
 
@@ -82,6 +92,7 @@ def register_default_metrics():
         display_name='2025-26 Live Student Due Count',
         data_type='count',
         default_agg='sum',
+        kpi_direction='negative',
         aliases=['2025-26 due count', 'current year due count', 'live student due count', 'due count', '2025-26 live student due count', 'cy_a_fdc'],
     ))
 
@@ -92,6 +103,7 @@ def register_default_metrics():
         display_name='2024-25 Fee Due Count',
         data_type='count',
         default_agg='sum',
+        kpi_direction='negative',
         aliases=['last year due count', '2024-25 fee due count', 'ly fee due count', 'ly due count', 'ly_fdc'],
     ))
 
@@ -102,6 +114,7 @@ def register_default_metrics():
         display_name='2025-26 Actual Zero Paid',
         data_type='count',
         default_agg='sum',
+        kpi_direction='negative',
         aliases=['2025-26 actual zero paid', 'actual zero paid', 'zero paid', 'cy_a_zp'],
     ))
 
@@ -112,6 +125,7 @@ def register_default_metrics():
         display_name='2025-26 Actual Zero Paid Count',
         data_type='count',
         default_agg='sum',
+        kpi_direction='negative',
         aliases=['cy zero paid count', 'zero paid count', 'actual zero paid count', 'cy_zp'],
     ))
 
@@ -122,6 +136,7 @@ def register_default_metrics():
         display_name='Current Year Zero Paid Fee Due',
         data_type='currency',
         default_agg='sum',
+        kpi_direction='negative',
         aliases=['current year zero paid fee due', 'zero paid fee due', 'cy zero paid fee due', 'cy_zp_fd'],
     ))
 
@@ -146,36 +161,326 @@ def register_default_metrics():
     ))
 
     # Branch Analytics metrics
-    branch_metrics = [
-        ('DPP', 'Dropouts Percentage', 'percentage', 'mean', ['dropout percentage', 'dpp', 'dropout %']),
-        ('DP', 'Dropouts', 'count', 'sum', ['dropouts', 'dropout count', 'dp']),
-        ('GS', 'Grant Strength', 'numeric', 'sum', ['grant strength', 'gs']),
-        ('NS', 'Net Strength', 'numeric', 'sum', ['net strength', 'ns']),
-        ('STR', 'Student Teacher Ratio', 'numeric', 'mean', ['student teacher ratio', 'str']),
-        ('NOS', 'Number of Sections', 'count', 'sum', ['number of sections', 'sections', 'nos']),
-        ('SPS', 'Students Per Section', 'numeric', 'mean', ['students per section', 'sps', 'avg-sps']),
-        ('SC', 'Staff Count', 'count', 'sum', ['staff count', 'sc']),
-        ('NOCR', 'Number of Class Rooms', 'count', 'sum', ['number of class rooms', 'nocr']),
-        ('NOOR', 'Number of Occupied Rooms', 'count', 'sum', ['number of occupied rooms', 'noor']),
-        ('NOVR', 'Number of Vacancy Rooms', 'count', 'sum', ['number of vacancy rooms', 'novr']),
-        ('ARCS', 'Average Room Capacity SqFt', 'numeric', 'mean', ['arcs', 'average room capacity']),
-        ('SD', 'Strength Difference', 'numeric', 'sum', ['strength difference', 'sd']),
-        ('NSD', 'Net Strength Difference', 'numeric', 'sum', ['net strength difference', 'nsd']),
-        ('vacancy_rate', 'Room Vacancy Percentage', 'percentage', 'mean', ['vacancy_rate', 'vacancy rate', 'vacant rate']),
-        ('occupancy_rate', 'Room Occupancy Percentage', 'percentage', 'mean', ['occupancy_rate', 'occupancy rate', 'occupied rate']),
+    branch_specs = [
+        MetricSpec(
+            metric_id='DPP',
+            dataset_id='branch_analytics',
+            source_column='DPP',
+            display_name='Dropouts Percentage',
+            data_type='percentage',
+            default_agg='derived',
+            metric_type='derived',
+            aggregation_rule='derived',
+            numerator_metric='DP',
+            denominator_metric='NS',
+            kpi_direction='negative',
+            aliases=['dropout percentage', 'dpp', 'dropout %', 'drop outs percentage'],
+        ),
+        MetricSpec(
+            metric_id='DP',
+            dataset_id='branch_analytics',
+            source_column='DP',
+            display_name='Dropouts',
+            data_type='count',
+            default_agg='sum',
+            kpi_direction='negative',
+            aliases=['dropouts', 'dropout count', 'dp', 'drop outs'],
+        ),
+        MetricSpec(
+            metric_id='GS',
+            dataset_id='branch_analytics',
+            source_column='GS',
+            display_name='Grant Strength',
+            data_type='numeric',
+            default_agg='sum',
+            aliases=['grant strength', 'gs'],
+        ),
+        MetricSpec(
+            metric_id='NS',
+            dataset_id='branch_analytics',
+            source_column='NS',
+            display_name='Net Strength',
+            data_type='numeric',
+            default_agg='sum',
+            aliases=['net strength', 'ns'],
+        ),
+        MetricSpec(
+            metric_id='STR',
+            dataset_id='branch_analytics',
+            source_column='STR',
+            display_name='Student Teacher Ratio',
+            data_type='numeric',
+            default_agg='derived',
+            metric_type='derived',
+            aggregation_rule='derived',
+            numerator_metric='NS',
+            denominator_metric='SC',
+            aliases=['student teacher ratio', 'str'],
+        ),
+        MetricSpec(
+            metric_id='NOS',
+            dataset_id='branch_analytics',
+            source_column='NOS',
+            display_name='Number of Sections',
+            data_type='count',
+            default_agg='sum',
+            aliases=['number of sections', 'sections', 'nos'],
+        ),
+        MetricSpec(
+            metric_id='SPS',
+            dataset_id='branch_analytics',
+            source_column='SPS',
+            display_name='Students Per Section',
+            data_type='numeric',
+            default_agg='derived',
+            metric_type='derived',
+            aggregation_rule='derived',
+            numerator_metric='NS',
+            denominator_metric='NOS',
+            aliases=['students per section', 'sps', 'avg-sps'],
+        ),
+        MetricSpec(
+            metric_id='SC',
+            dataset_id='branch_analytics',
+            source_column='SC',
+            display_name='Staff Count',
+            data_type='count',
+            default_agg='sum',
+            aliases=['staff count', 'sc'],
+        ),
+        MetricSpec(
+            metric_id='NOCR',
+            dataset_id='branch_analytics',
+            source_column='NOCR',
+            display_name='Number of Class Rooms',
+            data_type='count',
+            default_agg='sum',
+            aliases=['number of class rooms', 'nocr'],
+        ),
+        MetricSpec(
+            metric_id='NOOR',
+            dataset_id='branch_analytics',
+            source_column='NOOR',
+            display_name='Number of Occupied Rooms',
+            data_type='count',
+            default_agg='sum',
+            aliases=['number of occupied rooms', 'noor'],
+        ),
+        MetricSpec(
+            metric_id='NOVR',
+            dataset_id='branch_analytics',
+            source_column='NOVR',
+            display_name='Number of Vacancy Rooms',
+            data_type='count',
+            default_agg='sum',
+            aliases=['number of vacancy rooms', 'novr'],
+        ),
+        MetricSpec(
+            metric_id='ARCS',
+            dataset_id='branch_analytics',
+            source_column='ARCS',
+            display_name='Average Room Capacity SqFt',
+            data_type='numeric',
+            default_agg='mean',
+            aliases=['arcs', 'average room capacity'],
+        ),
+        MetricSpec(
+            metric_id='SD',
+            dataset_id='branch_analytics',
+            source_column='SD',
+            display_name='Strength Difference',
+            data_type='numeric',
+            default_agg='sum',
+            aliases=['strength difference', 'sd'],
+        ),
+        MetricSpec(
+            metric_id='NSD',
+            dataset_id='branch_analytics',
+            source_column='NSD',
+            display_name='Net Strength Difference',
+            data_type='numeric',
+            default_agg='sum',
+            aliases=['net strength difference', 'nsd'],
+        ),
+        MetricSpec(
+            metric_id='vacancy_rate',
+            dataset_id='branch_analytics',
+            source_column='vacancy_rate',
+            display_name='Room Vacancy Percentage',
+            data_type='percentage',
+            default_agg='derived',
+            metric_type='derived',
+            aggregation_rule='derived',
+            numerator_metric='NOVR',
+            denominator_metric='NOCR',
+            kpi_direction='negative',
+            aliases=['vacancy_rate', 'vacancy rate', 'vacant rate'],
+        ),
+        MetricSpec(
+            metric_id='occupancy_rate',
+            dataset_id='branch_analytics',
+            source_column='occupancy_rate',
+            display_name='Room Occupancy Percentage',
+            data_type='percentage',
+            default_agg='derived',
+            metric_type='derived',
+            aggregation_rule='derived',
+            numerator_metric='NOOR',
+            denominator_metric='NOCR',
+            aliases=['occupancy_rate', 'occupancy rate', 'occupied rate'],
+        ),
     ]
 
+    for spec in branch_specs:
+        metric_registry.register(spec)
 
-    for m_id, name, dtype, agg, aliases in branch_metrics:
-        metric_registry.register(MetricSpec(
-            metric_id=m_id,
-            dataset_id='branch_analytics',
-            source_column=m_id,
-            display_name=name,
-            data_type=dtype,
-            default_agg=agg,
-            aliases=aliases,
-        ))
+    # Revenue vs Salary Dataset metrics
+    rev_sal_specs = [
+        MetricSpec(
+            metric_id='TOT_REV_N',
+            dataset_id='revenue_vs_salary',
+            source_column='TOT_REV_N',
+            display_name='Total Net Revenue',
+            data_type='currency',
+            default_agg='sum',
+            aliases=['revenue', 'net revenue', 'total revenue', 'total net revenue', 'tot_rev_n', 'income', 'earnings'],
+        ),
+        MetricSpec(
+            metric_id='TOT_SAL',
+            dataset_id='revenue_vs_salary',
+            source_column='TOT_SAL',
+            display_name='Total Employee Salary Cost',
+            data_type='currency',
+            default_agg='sum',
+            aliases=['salary', 'salary cost', 'total salary', 'employee cost', 'tot_sal', 'staff cost'],
+        ),
+        MetricSpec(
+            metric_id='TOT_NS',
+            dataset_id='revenue_vs_salary',
+            source_column='TOT_NS',
+            display_name='Total Student Count',
+            data_type='count',
+            default_agg='sum',
+            aliases=['total students', 'student count', 'total student count', 'tot_ns'],
+        ),
+        MetricSpec(
+            metric_id='TOT_SC',
+            dataset_id='revenue_vs_salary',
+            source_column='TOT_SC',
+            display_name='Total Employee Count',
+            data_type='count',
+            default_agg='sum',
+            aliases=['total employees', 'employee count', 'total employee count', 'tot_sc', 'total staff count'],
+        ),
+        MetricSpec(
+            metric_id='TOT_FA',
+            dataset_id='revenue_vs_salary',
+            source_column='TOT_FA',
+            display_name='Total Fee Average',
+            data_type='currency',
+            default_agg='derived',
+            metric_type='derived',
+            aggregation_rule='derived',
+            numerator_metric='TOT_REV_N',
+            denominator_metric='TOT_NS',
+            aliases=['fee average', 'average fee', 'total fee average', 'tot_fa'],
+        ),
+        MetricSpec(
+            metric_id='TOT_CS',
+            dataset_id='revenue_vs_salary',
+            source_column='TOT_CS',
+            display_name='Total Cost per Student',
+            data_type='currency',
+            default_agg='derived',
+            metric_type='derived',
+            aggregation_rule='derived',
+            numerator_metric='TOT_SAL',
+            denominator_metric='TOT_NS',
+            aliases=['cost per student', 'total cost per student', 'tot_cs', 'student cost'],
+        ),
+        MetricSpec(
+            metric_id='TOT_SAL_V_REV',
+            dataset_id='revenue_vs_salary',
+            source_column='TOT_SAL_V_REV',
+            display_name='Total Salary vs Revenue %',
+            data_type='percentage',
+            default_agg='derived',
+            metric_type='derived',
+            aggregation_rule='derived',
+            numerator_metric='TOT_SAL',
+            denominator_metric='TOT_REV_N',
+            kpi_direction='negative',
+            aliases=['salary vs revenue', 'salary-to-revenue ratio', 'salary percentage', 'tot_sal_v_rev', 'salary burden'],
+        ),
+        MetricSpec(
+            metric_id='TOT_STR',
+            dataset_id='revenue_vs_salary',
+            source_column='TOT_STR',
+            display_name='Total Student Teacher Ratio',
+            data_type='numeric',
+            default_agg='derived',
+            metric_type='derived',
+            aggregation_rule='derived',
+            numerator_metric='TOT_NS',
+            denominator_metric='TOT_SC',
+            aliases=['student teacher ratio', 'total student teacher ratio', 'tot_str', 'student-staff ratio'],
+        ),
+        MetricSpec(
+            metric_id='SURPLUS',
+            dataset_id='revenue_vs_salary',
+            source_column='SURPLUS',
+            display_name='Surplus after Salary',
+            data_type='currency',
+            default_agg='sum',
+            aliases=['surplus', 'surplus after salary', 'revenue minus salary', 'revenue after salary', 'net surplus'],
+        ),
+    ]
+
+    for spec in rev_sal_specs:
+        metric_registry.register(spec)
+
+    segments = ['PP', 'LPS', 'UPS', 'HS', 'ACD', 'AD_AC']
+    suffixes = [
+        ('SC', 'Employee Count', 'count'),
+        ('SAL', 'Employee Cost', 'currency'),
+        ('NS', 'Student Count', 'count'),
+        ('REV_N', 'Net Revenue', 'currency'),
+        ('FA', 'Fee Average', 'currency'),
+        ('CS', 'Cost per Student', 'currency'),
+        ('SAL_V_REV', 'Salary vs Revenue %', 'percentage'),
+        ('STR', 'Student Teacher Ratio', 'numeric'),
+    ]
+
+    for seg in segments:
+        for sfx, lbl, dtype in suffixes:
+            metric_id = f"{seg}_{sfx}"
+            is_derived = sfx in ('FA', 'CS', 'SAL_V_REV', 'STR')
+            num_m = None
+            den_m = None
+            if sfx == 'FA':
+                num_m, den_m = f"{seg}_REV_N", f"{seg}_NS"
+            elif sfx == 'CS':
+                num_m, den_m = f"{seg}_SAL", f"{seg}_NS"
+            elif sfx == 'SAL_V_REV':
+                num_m, den_m = f"{seg}_SAL", f"{seg}_REV_N"
+            elif sfx == 'STR':
+                num_m, den_m = f"{seg}_NS", f"{seg}_SC"
+
+            metric_registry.register(MetricSpec(
+                metric_id=metric_id,
+                dataset_id='revenue_vs_salary',
+                source_column=metric_id,
+                display_name=f"{seg} {lbl}",
+                data_type=dtype,
+                default_agg='derived' if is_derived else ('sum' if dtype in ('currency', 'count') else 'mean'),
+                metric_type='derived' if is_derived else 'additive',
+                aggregation_rule='derived' if is_derived else 'sum',
+                numerator_metric=num_m,
+                denominator_metric=den_m,
+                kpi_direction='negative' if sfx in ('SAL_V_REV',) else 'positive',
+                aliases=[metric_id.lower(), f"{seg.lower()} {lbl.lower()}"],
+            ))
+
 
 
 register_default_metrics()

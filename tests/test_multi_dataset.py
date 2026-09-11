@@ -139,10 +139,12 @@ class MultiDatasetEngineTests(SimpleTestCase):
             response = QueryView.as_view()(request)
             self.assertEqual(response.status_code, 200)
             self.assertTrue(response.data['success'])
-            self.assertEqual(response.data['function'], 'rank_branches_by_metric')
+            # Now routed to the dedicated fee_summary capability
+            self.assertEqual(response.data['function'], 'fee_summary')
             self.assertEqual(len(response.data['data']), 2)
             self.assertEqual(response.data['data'][0]['branch'], 'KAKINADA 2')
-            self.assertEqual(response.data['data'][0]['value'], 8000.0)
+            # fee_summary returns CY_A_FD key, not generic 'value'
+            self.assertEqual(response.data['data'][0]['CY_A_FD'], 8000.0)
 
     def test_11_api_zero_paid_fee_due_query(self):
         with override_settings(BRANCH_ANALYTICS_FILE=self.branch_path, FEE_DUE_FILE=self.fee_path):
@@ -152,8 +154,10 @@ class MultiDatasetEngineTests(SimpleTestCase):
             response = QueryView.as_view()(request)
             self.assertEqual(response.status_code, 200)
             self.assertTrue(response.data['success'])
+            self.assertEqual(response.data['function'], 'fee_summary')
             self.assertEqual(response.data['data'][0]['branch'], 'KAKINADA 2')
-            self.assertEqual(response.data['data'][0]['value'], 2000.0)
+            # sorted by CY_ZP_FD (zero paid fee due amount)
+            self.assertEqual(response.data['data'][0]['CY_ZP_FD'], 2000.0)
 
     def test_12_books_not_purchased_query(self):
         with override_settings(BRANCH_ANALYTICS_FILE=self.branch_path, FEE_DUE_FILE=self.fee_path):
@@ -163,5 +167,8 @@ class MultiDatasetEngineTests(SimpleTestCase):
             response = QueryView.as_view()(request)
             self.assertEqual(response.status_code, 200)
             self.assertTrue(response.data['success'])
+            self.assertEqual(response.data['function'], 'fee_books_not_purchased')
             self.assertEqual(response.data['data'][0]['branch'], 'KAKINADA 2')
-            self.assertEqual(response.data['data'][0]['value'], 4.0)
+            # fee_books_not_purchased returns CY_FP_BN key, not generic 'value'
+            self.assertEqual(response.data['data'][0]['CY_FP_BN'], 4)
+

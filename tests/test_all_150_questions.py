@@ -204,3 +204,19 @@ class All150QuestionsTest(SimpleTestCase):
 
         if errors:
             self.fail(f"{len(errors)} question(s) failed routing/execution:\n" + "\n".join(errors[:20]))
+
+    def test_domain_1_mandatory_three_column_format(self):
+        table_funcs = {
+            "top_5_dropout_branches",
+            "rank_branches_by_metric",
+            "group_metric_aggregate",
+            "year_over_year_change_ranking",
+            "compare_dimensions",
+        }
+        for q_num, question, expected_func in ALL_150_QUESTIONS:
+            if expected_func in table_funcs:
+                handler = route_question(question)
+                result = handler(self.context)
+                ans = result.get('answer', '')
+                if '| Current Year |' in ans:
+                    self.assertTrue('| Change |' in ans or '| Difference |' in ans, f"Q{q_num} ('{question}') markdown table missing '| Change |' column")

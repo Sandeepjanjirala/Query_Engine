@@ -62,7 +62,7 @@ def register_default_datasets():
     branch_sheet = getattr(settings, 'BRANCH_ANALYTICS_SHEET', 'Sheet1')
     
     fee_file = getattr(settings, 'FEE_DUE_FILE', base_dir / 'data' / 'fee due.xlsx')
-    fee_sheet = getattr(settings, 'FEE_DUE_SHEET', 'Anys_fee_due_data')
+    fee_sheet = getattr(settings, 'FEE_DUE_SHEET', 'Sheet1')
 
     registry.register(
         DatasetSpec(
@@ -109,7 +109,41 @@ def register_default_datasets():
                 'LY_FD', 'LY_FDC', 'CY_A_FD', 'CY_A_FDC',
                 'CY_A_ZP', 'CY_ZP', 'CY_ZP_FD', 'CY_FP_BN', 'CY_FN_BN'
             ],
-            description='Fee Due, Zero Paid, and Books Not Purchased dataset',
+            description='Fee due analysis dataset',
         )
     )
+
+    rev_sal_file = getattr(settings, 'REVENUE_VS_SALARY_FILE', base_dir / 'data' / 'Revenue vs salary.xlsx')
+    rev_sal_sheet = getattr(settings, 'REVENUE_VS_SALARY_SHEET', 'Anys_Rev_vs_Sal')
+
+    rev_sal_metrics = []
+    segments = ['PP', 'LPS', 'UPS', 'HS', 'ACD', 'AD_AC', 'TOT']
+    suffixes = ['SC', 'SAL', 'NS', 'REV_N', 'FA', 'CS', 'SAL_V_REV', 'STR']
+    for seg in segments:
+        for sfx in suffixes:
+            rev_sal_metrics.append(f"{seg}_{sfx}")
+    rev_sal_metrics.extend(['SURPLUS', 'TOT_SURPLUS'])
+
+    rev_sal_mapping = {
+        'AGM Name': 'AGM',
+        'RI Name': 'RI',
+        'Zone': 'Zone',
+        'Branch': 'Branch',
+        'S_Type': 'Branch Type',
+    }
+    for m in rev_sal_metrics:
+        rev_sal_mapping[m] = m
+
+    registry.register(
+        DatasetSpec(
+            dataset_id='revenue_vs_salary',
+            file_path=Path(rev_sal_file),
+            sheet_name=rev_sal_sheet,
+            common_dimensions=['AGM', 'RI', 'Zone', 'Branch'],
+            column_mapping=rev_sal_mapping,
+            metrics=rev_sal_metrics,
+            description='Revenue vs Salary dataset across academic segments (PP, LPS, UPS, HS, ACD, AD_AC, TOT)',
+        )
+    )
+
 

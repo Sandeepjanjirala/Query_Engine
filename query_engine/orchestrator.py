@@ -10,9 +10,17 @@ from .analytics import (
     aggregate_metric_total,
     calculate_room_ratio,
     compare_dimensions,
+    entity_summary,
+    fee_books_not_purchased,
+    fee_summary_by_branch,
+    fee_yoy_comparison,
     filter_by_threshold,
     lookup_branch_metrics,
     rank_branches_by_metric,
+    revenue_salary_ranking,
+    revenue_salary_segment_comparison,
+    revenue_salary_summary,
+    revenue_salary_threshold_filter,
     top_5_dropout_branches,
     year_over_year_ranking,
 )
@@ -20,8 +28,16 @@ from .formatting import (
     format_branch_lookup,
     format_branch_scorecard,
     format_dimension_comparison,
+    format_entity_summary,
+    format_fee_books,
+    format_fee_summary,
+    format_fee_yoy,
     format_group_aggregate,
     format_ranked_branches,
+    format_revenue_salary_ranking,
+    format_revenue_salary_segment_comparison,
+    format_revenue_salary_summary,
+    format_revenue_salary_threshold,
     format_room_ratio,
     format_room_snapshot,
     format_scope_total,
@@ -39,6 +55,7 @@ from .query_planner import get_prepared_dataframe
 
 
 from .dataset_loader import clear_dataset_cache
+from .filters import apply_filter_context
 
 
 @lru_cache(maxsize=1)
@@ -64,9 +81,10 @@ def _empty_result(function_name: str, answer: str):
     return {'function': function_name, 'answer': answer, 'data': []}
 
 
-def run_top_5_dropout(context: dict | None = None):
+def run_top_5_dropout(params: dict | None = None, context: dict | None = None):
     """V1 pre-function: top 5 branches with highest CY-DPP."""
-    df = get_prepared_dataframe(['CY-DPP'], context)
+    ctx = context if context is not None else (params if isinstance(params, dict) and 'question' not in params else None)
+    df = get_prepared_dataframe(['CY-DPP'], ctx)
     results = top_5_dropout_branches(df)
     return {
         'function': 'top_5_dropout_branches',
@@ -271,6 +289,9 @@ def run_compare_dimensions(params: dict, context: dict | None = None):
     index = build_metric_index(df)
 
     if dimension_type == 'level':
+        spec = get_default_metric_registry().get(metric)
+        kpi_dir = spec.kpi_direction if spec else ('negative' if 'dpp' in metric.lower() or 'dropout' in metric.lower() else 'positive')
+
         if year == 'yoy' or params.get('direction') in ('positive', 'negative'):
             yoy_pairs = {
                 'PP': (resolve_column(index, metric, 'PP', None, 'CY'), resolve_column(index, metric, 'PP', None, 'LY')),
@@ -279,7 +300,7 @@ def run_compare_dimensions(params: dict, context: dict | None = None):
             }
             direction = 'improved' if params.get('direction') == 'positive' else ('declined' if params.get('direction') == 'negative' else None)
             agg = 'mean' if metric in ('DPP', 'STR', 'Avg-SPS') else 'sum'
-            results = compare_dimensions(df, {}, group_column=None, agg=agg, top=direction, yoy_pairs=yoy_pairs)
+            results = compare_dimensions(df, {}, group_column=None, agg=agg, top=direction, yoy_pairs=yoy_pairs, kpi_direction=kpi_dir)
             return {
                 'function': 'compare_dimensions',
                 'answer': format_dimension_comparison(results, metric, 'education levels'),
@@ -293,7 +314,7 @@ def run_compare_dimensions(params: dict, context: dict | None = None):
         }
         columns_map = {k: v for k, v in columns_map.items() if v}
         agg = 'mean' if metric in ('DPP', 'STR', 'Avg-SPS') else 'sum'
-        results = compare_dimensions(df, columns_map, group_column=group_column, agg=agg, top=top)
+        results = compare_dimensions(df, columns_map, group_column=group_column, agg=agg, top=top, kpi_direction=kpi_dir)
         return {
             'function': 'compare_dimensions',
             'answer': format_dimension_comparison(results, metric, 'education levels'),
@@ -360,16 +381,40 @@ def run_calculate_room_ratio(params: dict, context: dict | None = None):
 
 
 def run_scope_total(params: dict, context: dict | None = None):
-    """Calculate overall total for a metric across current filter scope."""
+    """Calculate overall metric value across current filter scope."""
     metric = params.get('metric') or 'NOOR'
     spec = get_default_metric_registry().get(metric)
     m_key = spec.metric_id if spec else metric
     df = get_prepared_dataframe([m_key], context)
 
-    column = spec.source_column if spec and spec.source_column in df.columns else (resolve_column(build_metric_index(df), metric) or metric)
-    if column not in df.columns:
-        return _empty_result('scope_total', f'Column not found for {metric}.')
-    val = aggregate_metric_total(df, column, agg='sum')
+    val = None
+    if spec and spec.metric_type == 'derived' and spec.numerator_metric and spec.denominator_metric:
+        num_col = spec.numerator_metric
+        den_col = spec.denominator_metric
+        if num_col not in df.columns:
+            num_col = f"CY-{num_col}" if f"CY-{num_col}" in df.columns else f"CY_{num_col}"
+        if den_col not in df.columns:
+            den_col = f"CY-{den_col}" if f"CY-{den_col}" in df.columns else f"CY_{den_col}"
+
+        if num_col in df.columns and den_col in df.columns:
+            n_sum = pd.to_numeric(df[num_col], errors='coerce').sum()
+            d_sum = pd.to_numeric(df[den_col], errors='coerce').sum()
+            if d_sum > 0:
+                val = (n_sum / d_sum) * (100.0 if spec.data_type == 'percentage' else 1.0)
+
+    if val is None:
+        column = spec.source_column if spec and spec.source_column in df.columns else (resolve_column(build_metric_index(df), metric) or metric)
+        if column not in df.columns:
+            if f"CY-{column}" in df.columns:
+                column = f"CY-{column}"
+            elif f"CY_{column}" in df.columns:
+                column = f"CY_{column}"
+        if column not in df.columns:
+            return _empty_result('scope_total', f'Column not found for {metric}.')
+        agg = 'mean' if (spec and spec.data_type == 'percentage') else 'sum'
+        val = aggregate_metric_total(df, column, agg=agg)
+
+    val = round(float(val), 2)
     return {
         'function': 'scope_total',
         'answer': format_scope_total(val, metric),
@@ -480,3 +525,485 @@ def run_branch_scorecard(params: dict, context: dict | None = None):
         'answer': format_branch_scorecard(entry, branch_label),
         'data': results,
     }
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Fee Due pre-built orchestrator runners (with Output Projection)
+# ---------------------------------------------------------------------------
+
+def _project_fee_data(results: list[dict], target_metric: str | None, group_dim: str = 'Branch') -> list[dict]:
+    if not results:
+        return []
+    if target_metric in (None, 'summary'):
+        return results
+
+    sample = results[0]
+    entity_key = 'branch'
+    for k in ('branch', 'zone', 'ri', 'agm', 's_type'):
+        if k in sample:
+            entity_key = k
+            break
+
+    projected = []
+    for rank_idx, item in enumerate(results, start=1):
+        row = {entity_key: item[entity_key]}
+        if 'rank' in item:
+            row['rank'] = item['rank']
+
+        if target_metric == 'LY_FD':
+            row['LY_FD'] = item.get('LY_FD', item.get('last_year', 0.0))
+        elif target_metric == 'LY_FDC':
+            row['LY_FDC'] = int(item.get('LY_FDC', 0))
+        elif target_metric == 'CY_A_FD':
+            row['CY_A_FD'] = item.get('CY_A_FD', item.get('current_year', 0.0))
+        elif target_metric == 'CY_A_FDC':
+            row['CY_A_FDC'] = int(item.get('CY_A_FDC', 0))
+        elif target_metric == 'CY_A_ZP':
+            row['CY_A_ZP'] = int(item.get('CY_A_ZP', 0))
+        elif target_metric == 'CY_ZP':
+            row['CY_ZP'] = int(item.get('CY_ZP', 0))
+        elif target_metric == 'CY_ZP_FD':
+            row['CY_ZP_FD'] = item.get('CY_ZP_FD', 0.0)
+        elif target_metric == 'CY_FP_BN':
+            row['CY_FP_BN'] = int(item.get('CY_FP_BN', 0))
+        elif target_metric == 'CY_FN_BN':
+            row['CY_FN_BN'] = int(item.get('CY_FN_BN', 0))
+        elif target_metric == 'fee_yoy':
+            row['LY_FD'] = item.get('LY_FD', item.get('last_year', 0.0))
+            row['CY_A_FD'] = item.get('CY_A_FD', item.get('current_year', 0.0))
+            row['difference'] = item.get('difference', item.get('change', 0.0))
+        elif target_metric == 'books_summary':
+            row['CY_FP_BN'] = int(item.get('CY_FP_BN', 0))
+            row['CY_FN_BN'] = int(item.get('CY_FN_BN', 0))
+        else:
+            return results
+        projected.append(row)
+    return projected
+
+
+def run_fee_summary(params: dict, context: dict | None = None):
+    """
+    Fee due snapshot per branch/zone/RI/AGM/S_Type with strict Output Projection.
+    """
+    fee_metrics = ['CY_A_FD', 'LY_FD', 'CY_A_FDC', 'LY_FDC', 'CY_ZP', 'CY_ZP_FD']
+    df = get_prepared_dataframe(fee_metrics, context)
+
+    question = params.get('question', '')
+    target_metric = extract_target_metric(question, params.get('metric'))
+    group_col = params.get('group_dim') or params.get('group_col')
+    n = params.get('n')
+    ascending = params.get('ascending', False)
+
+    context_branches = [
+        b for b in (context or {}).get('branches', [])
+        if str(b).strip().casefold() != 'all'
+    ]
+    branches = params.get('branches') or context_branches or None
+
+    # Handle global scalar total queries (e.g. "What was the last year 2024-25 fee due amount?")
+    if not group_col and not n and not branches and target_metric in ('LY_FD', 'CY_A_FD', 'LY_FDC', 'CY_A_FDC', 'CY_ZP', 'CY_ZP_FD'):
+        metric_col = target_metric
+        col_values = pd.to_numeric(df[metric_col], errors='coerce').fillna(0) if metric_col in df.columns else pd.Series([0])
+        total_val = float(col_values.sum())
+        spec = get_default_metric_registry().get(target_metric)
+        label = spec.display_name if spec else target_metric
+        if 'FD' in target_metric and 'FDC' not in target_metric:
+            formatted_val = f"\u20b9{int(round(total_val)):,}"
+        else:
+            formatted_val = f"{int(total_val):,}"
+        answer = f"Total {label}: {formatted_val}"
+        return {
+            'function': 'fee_summary',
+            'answer': answer,
+            'data': [{target_metric: round(total_val, 2)}],
+        }
+
+    sort_col = target_metric if target_metric in fee_metrics else params.get('sort_col', 'CY_A_FD')
+    columns = params.get('columns') or fee_metrics
+
+    results = fee_summary_by_branch(
+        df, columns=columns, branches=branches,
+        n=n, sort_col=sort_col, ascending=ascending, group_col=group_col,
+    )
+    projected_data = _project_fee_data(results, target_metric=target_metric, group_dim=group_col or 'Branch')
+    answer = format_fee_summary(results, [sort_col], n=n, ascending=ascending, group_col=group_col, target_metric=target_metric)
+    return {
+        'function': 'fee_summary',
+        'answer': answer,
+        'data': projected_data,
+    }
+
+
+def run_fee_books_not_purchased(params: dict, context: dict | None = None):
+    """
+    Books not purchased per branch/zone/RI/AGM/S_Type with strict Output Projection.
+    """
+    df = get_prepared_dataframe(['CY_FP_BN', 'CY_FN_BN'], context)
+
+    question = params.get('question', '')
+    target_metric = extract_target_metric(question, params.get('metric'))
+    group_col = params.get('group_dim') or params.get('group_col')
+    mode = params.get('mode', 'both')
+    n = params.get('n')
+    ascending = params.get('ascending', False)
+
+    context_branches = [
+        b for b in (context or {}).get('branches', [])
+        if str(b).strip().casefold() != 'all'
+    ]
+    branches = params.get('branches') or context_branches or None
+
+    # Handle global scalar total queries (e.g. "Show count of students who did not pay fee and did not purchase books")
+    if not group_col and not n and not branches and target_metric in ('CY_FP_BN', 'CY_FN_BN'):
+        metric_col = target_metric
+        col_values = pd.to_numeric(df[metric_col], errors='coerce').fillna(0) if metric_col in df.columns else pd.Series([0])
+        total_count = int(col_values.sum())
+        label = "Fee Paid But Books Not Purchased" if target_metric == 'CY_FP_BN' else "Fee Not Paid & Books Not Purchased"
+        answer = f"Total Students ({label}): {total_count:,}"
+        return {
+            'function': 'fee_books_not_purchased',
+            'answer': answer,
+            'data': [{target_metric: total_count}],
+        }
+
+    results = fee_books_not_purchased(df, mode=mode, n=n, ascending=ascending, branches=branches, group_col=group_col)
+    projected_data = _project_fee_data(results, target_metric=target_metric, group_dim=group_col or 'Branch')
+    answer = format_fee_books(results, mode=mode, group_col=group_col, target_metric=target_metric)
+    return {
+        'function': 'fee_books_not_purchased',
+        'answer': answer,
+        'data': projected_data,
+    }
+
+
+def run_fee_yoy_comparison(params: dict, context: dict | None = None):
+    """
+    Year-over-year fee due comparison (LY_FD → CY_A_FD) with strict Output Projection.
+    """
+    df = get_prepared_dataframe(['CY_A_FD', 'LY_FD'], context)
+
+    question = params.get('question', '')
+    target_metric = extract_target_metric(question, params.get('metric')) or 'fee_yoy'
+    group_col = params.get('group_dim') or params.get('group_col')
+    n = params.get('n')
+    ascending = params.get('ascending', False)
+
+    context_branches = [
+        b for b in (context or {}).get('branches', [])
+        if str(b).strip().casefold() != 'all'
+    ]
+    branches = params.get('branches') or context_branches or None
+
+    results = fee_yoy_comparison(df, n=n, ascending=ascending, branches=branches, group_col=group_col)
+    projected_data = _project_fee_data(results, target_metric=target_metric, group_dim=group_col or 'Branch')
+    answer = format_fee_yoy(results, ascending=ascending, group_col=group_col)
+    return {
+        'function': 'fee_yoy_comparison',
+        'answer': answer,
+        'data': projected_data,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Revenue vs Salary pre-built orchestrator runners (with Output Projection)
+# ---------------------------------------------------------------------------
+
+from .params import extract_compared_segments, extract_target_metric
+
+
+def _map_rev_sal_group_col(group_dim: str | None) -> str:
+    if not group_dim:
+        return 'Branch'
+    g_lower = str(group_dim).lower()
+    if 'agm' in g_lower:
+        return 'AGM'
+    if 'ri' in g_lower:
+        return 'RI'
+    if 'zone' in g_lower:
+        return 'Zone'
+    return 'Branch'
+
+
+def _project_summary_data(res: dict, target_metric: str) -> dict:
+    if not res:
+        return {}
+    if target_metric == 'summary':
+        return res
+
+    base = {
+        'branch_count': res.get('branch_count', 0),
+        'segment': res.get('segment', 'TOT'),
+        'segment_label': res.get('segment_label', 'Total Overall'),
+    }
+    if target_metric == 'total_students':
+        base['total_students'] = res.get('total_students', 0)
+    elif target_metric == 'total_employees':
+        base['total_employees'] = res.get('total_employees', 0)
+    elif target_metric == 'total_salary':
+        base['total_salary'] = res.get('total_salary', 0.0)
+    elif target_metric == 'total_revenue':
+        base['total_revenue'] = res.get('total_revenue', 0.0)
+    elif target_metric == 'surplus':
+        base['surplus'] = res.get('surplus', 0.0)
+        base['total_revenue'] = res.get('total_revenue', 0.0)
+        base['total_salary'] = res.get('total_salary', 0.0)
+    elif target_metric == 'cost_per_student':
+        base['cost_per_student'] = res.get('cost_per_student', 0.0)
+    elif target_metric == 'fee_average':
+        base['fee_average'] = res.get('fee_average', 0.0)
+    elif target_metric == 'salary_vs_revenue_pct':
+        base['salary_vs_revenue_pct'] = res.get('salary_vs_revenue_pct', 0.0)
+    elif target_metric == 'student_teacher_ratio':
+        base['student_teacher_ratio'] = res.get('student_teacher_ratio', 0.0)
+    elif target_metric == 'revenue_vs_salary':
+        base['total_revenue'] = res.get('total_revenue', 0.0)
+        base['total_salary'] = res.get('total_salary', 0.0)
+        base['surplus'] = res.get('surplus', 0.0)
+        base['salary_vs_revenue_pct'] = res.get('salary_vs_revenue_pct', 0.0)
+    else:
+        return res
+    return base
+
+
+def _project_ranking_data(results: list[dict], target_metric: str) -> list[dict]:
+    if target_metric == 'summary':
+        return results
+
+    projected = []
+    for item in results:
+        row = {'rank': item['rank'], 'entity': item['entity']}
+        if target_metric == 'total_students':
+            row['total_students'] = item['total_students']
+        elif target_metric == 'total_employees':
+            row['total_employees'] = item['total_employees']
+        elif target_metric == 'total_salary':
+            row['total_salary'] = item['total_salary']
+        elif target_metric == 'total_revenue':
+            row['total_revenue'] = item['total_revenue']
+        elif target_metric == 'surplus':
+            row['surplus'] = item['surplus']
+            row['total_revenue'] = item['total_revenue']
+            row['total_salary'] = item['total_salary']
+        elif target_metric == 'cost_per_student':
+            row['cost_per_student'] = item['cost_per_student']
+        elif target_metric == 'fee_average':
+            row['fee_average'] = item['fee_average']
+        elif target_metric == 'salary_vs_revenue_pct':
+            row['salary_vs_revenue_pct'] = item['salary_vs_revenue_pct']
+        elif target_metric == 'student_teacher_ratio':
+            row['student_teacher_ratio'] = item['student_teacher_ratio']
+        elif target_metric == 'revenue_vs_salary':
+            row['total_revenue'] = item['total_revenue']
+            row['total_salary'] = item['total_salary']
+            row['surplus'] = item['surplus']
+            row['salary_vs_revenue_pct'] = item['salary_vs_revenue_pct']
+        else:
+            projected.append(item)
+            continue
+        projected.append(row)
+    return projected
+
+
+def _project_segment_data(results: list[dict], target_metric: str, segments_filter: list[str] | None = None) -> list[dict]:
+    filtered = results
+    if segments_filter:
+        filtered = [r for r in results if r['segment'] in segments_filter]
+        if not filtered:
+            filtered = results
+    if target_metric == 'summary' and not segments_filter:
+        return results
+
+    projected = []
+    for item in filtered:
+        row = {'segment': item['segment'], 'segment_name': item['segment_label']}
+        if target_metric == 'total_students':
+            row['student_count'] = item['total_students']
+        elif target_metric == 'total_employees':
+            row['employee_count'] = item['total_employees']
+        elif target_metric == 'total_salary':
+            row['total_salary'] = item['total_salary']
+        elif target_metric == 'total_revenue':
+            row['total_revenue'] = item['total_revenue']
+        elif target_metric == 'surplus':
+            row['surplus'] = item['surplus']
+        elif target_metric == 'cost_per_student':
+            row['cost_per_student'] = item['cost_per_student']
+        elif target_metric == 'fee_average':
+            row['fee_average'] = item['fee_average']
+        elif target_metric == 'salary_vs_revenue_pct':
+            row['salary_vs_revenue_pct'] = item['salary_vs_revenue_pct']
+        elif target_metric == 'student_teacher_ratio':
+            row['student_teacher_ratio'] = item['student_teacher_ratio']
+        else:
+            row.update({
+                'total_revenue': item['total_revenue'],
+                'total_salary': item['total_salary'],
+                'surplus': item['surplus'],
+                'salary_vs_revenue_pct': item['salary_vs_revenue_pct'],
+            })
+        projected.append(row)
+    return projected
+
+
+def run_revenue_salary_summary(params: dict, context: dict | None = None):
+    """
+    Computes aggregated summary metrics for Revenue vs Salary dataset
+    and applies intent-based output projection.
+    """
+    df = get_prepared_dataframe(['TOT_REV_N'], context=context, primary_dataset_id='revenue_vs_salary')
+    segment = params.get('segment') or 'TOT'
+    res = revenue_salary_summary(df, segment=segment)
+
+    question = params.get('question', '')
+    target_metric = extract_target_metric(question, params.get('metric'))
+
+    answer = format_revenue_salary_summary(res, target_metric=target_metric)
+    data = _project_summary_data(res, target_metric=target_metric)
+    return {
+        'function': 'revenue_salary_summary',
+        'answer': answer,
+        'data': data,
+    }
+
+
+def run_revenue_salary_segment_comparison(params: dict, context: dict | None = None):
+    """
+    Compares metrics across academic segments (PP, LPS, UPS, HS, ACD, AD_AC)
+    and applies intent-based output projection.
+    """
+    df = get_prepared_dataframe(['TOT_REV_N'], context=context, primary_dataset_id='revenue_vs_salary')
+    results = revenue_salary_segment_comparison(df)
+
+    question = params.get('question', '')
+    target_metric = extract_target_metric(question, params.get('metric'))
+    segments_filter = extract_compared_segments(question)
+
+    answer = format_revenue_salary_segment_comparison(results, target_metric=target_metric, segments_filter=segments_filter)
+    data = _project_segment_data(results, target_metric=target_metric, segments_filter=segments_filter)
+    return {
+        'function': 'revenue_salary_segment_comparison',
+        'answer': answer,
+        'data': data,
+    }
+
+
+def run_revenue_salary_ranking(params: dict, context: dict | None = None):
+    """
+    Ranks entities (Branch, RI, Zone, AGM) by a Revenue vs Salary metric
+    and applies intent-based output projection.
+    """
+    df = get_prepared_dataframe(['TOT_REV_N'], context=context, primary_dataset_id='revenue_vs_salary')
+    metric = params.get('metric') or 'TOT_REV_N'
+    group_dim = params.get('group_dim') or params.get('level') or 'Branch'
+    group_col = _map_rev_sal_group_col(group_dim)
+    n = params.get('n', 5)
+    ascending = params.get('ascending', False)
+
+    results = revenue_salary_ranking(df, metric=metric, group_col=group_col, n=n, ascending=ascending)
+    spec = get_default_metric_registry().get(metric)
+    metric_label = spec.display_name if spec else metric
+
+    question = params.get('question', '')
+    target_metric = extract_target_metric(question, metric)
+
+    answer = format_revenue_salary_ranking(results, metric_label, target_metric=target_metric, group_dim=group_col, ascending=ascending)
+    data = _project_ranking_data(results, target_metric=target_metric)
+    return {
+        'function': 'revenue_salary_ranking',
+        'answer': answer,
+        'data': data,
+    }
+
+
+def run_revenue_salary_threshold(params: dict, context: dict | None = None):
+    """
+    Filters entities matching threshold conditions (e.g. revenue > 1 crore)
+    and applies intent-based output projection.
+    """
+    df = get_prepared_dataframe(['TOT_REV_N'], context=context, primary_dataset_id='revenue_vs_salary')
+    metric = params.get('metric') or 'TOT_REV_N'
+    op = params.get('op') or '>'
+    value = float(params.get('value', 10000000.0))
+    group_dim = params.get('group_dim') or 'Branch'
+    group_col = _map_rev_sal_group_col(group_dim)
+
+    results = revenue_salary_threshold_filter(df, metric=metric, operator=op, value=value, group_col=group_col)
+    spec = get_default_metric_registry().get(metric)
+    metric_label = spec.display_name if spec else metric
+
+    question = params.get('question', '')
+    target_metric = extract_target_metric(question, metric)
+
+    answer = format_revenue_salary_threshold(results, metric_label, target_metric=target_metric, op=op, value=value, group_dim=group_col)
+    data = _project_ranking_data(results, target_metric=target_metric)
+    return {
+        'function': 'revenue_salary_threshold',
+        'answer': answer,
+        'data': data,
+    }
+
+
+def run_revenue_salary_surplus(params: dict, context: dict | None = None):
+    """
+    Handles net surplus queries (Surplus = Revenue - Salary).
+    """
+    if params.get('ranking') or params.get('n') or params.get('group_dim'):
+        params['metric'] = 'SURPLUS'
+        return run_revenue_salary_ranking(params, context=context)
+    return run_revenue_salary_summary(params, context=context)
+
+
+def run_revenue_salary_ratio(params: dict, context: dict | None = None):
+    """
+    Handles ratio / percentage / per-student queries (Fee Average, Cost per Student, Salary vs Revenue %, STR).
+    """
+    if params.get('ranking') or params.get('n') or params.get('group_dim'):
+        return run_revenue_salary_ranking(params, context=context)
+    return run_revenue_salary_summary(params, context=context)
+
+
+def run_entity_summary(params: dict, context: dict | None = None):
+    """
+    Handles multi-metric organizational entity summary report card requests.
+    """
+    df = get_dataframe()
+    context = context or {}
+    df = apply_filter_context(df, context)
+
+    def _is_specific(val):
+        return bool(val) and str(val).strip().casefold() != 'all'
+
+    group_dim = params.get('group_dimension') or (
+        'Zone' if _is_specific(context.get('zone')) else (
+            'RI' if _is_specific(context.get('ri')) else (
+                'AGM' if _is_specific(context.get('agm')) else (
+                    'Branch' if _is_specific(context.get('branch')) or (isinstance(context.get('branches'), list) and len(context.get('branches')) == 1 and _is_specific(context.get('branches')[0])) else None
+                )
+            )
+        )
+    )
+    group_col = GROUP_COLUMNS.get(str(group_dim).lower(), group_dim) if group_dim else None
+
+    entity_name = (
+        context.get('zone') if _is_specific(context.get('zone')) else (
+            context.get('ri') if _is_specific(context.get('ri')) else (
+                context.get('agm') if _is_specific(context.get('agm')) else (
+                    context.get('branch') if _is_specific(context.get('branch')) else (
+                        context.get('branches')[0] if isinstance(context.get('branches'), list) and len(context.get('branches')) == 1 and _is_specific(context.get('branches')[0]) else None
+                    )
+                )
+            )
+        )
+    )
+
+    res = entity_summary(df, group_column=group_col, entity_name=entity_name)
+
+    answer = format_entity_summary(res)
+    return {
+        'function': 'entity_summary',
+        'answer': answer,
+        'data': res.get('records', []),
+    }
+
+

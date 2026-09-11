@@ -102,3 +102,21 @@ class APITests(SimpleTestCase):
             path.unlink(missing_ok=True)
             clear_caches()
 
+    def test_filter_options_endpoint(self):
+        from query_engine.views import FilterOptionsView
+        request = APIRequestFactory().get('/api/filters/')
+        response = FilterOptionsView.as_view()(request)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('agms', response.data)
+        self.assertIn('ris', response.data)
+        self.assertIn('zones', response.data)
+        self.assertIn('branches', response.data)
+
+    def test_dashboard_and_full_dash_routes(self):
+        from django.test import Client
+        client = Client()
+        r_dash = client.get('/dashboard')
+        self.assertEqual(r_dash.status_code, 200)
+        r_full = client.get('/dash')
+        self.assertEqual(r_full.status_code, 200)
+

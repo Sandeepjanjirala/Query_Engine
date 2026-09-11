@@ -19,11 +19,17 @@ NUMBER_WORDS = {
     'twelve': 12, 'fifteen': 15, 'twenty': 20,
 }
 
-_RANK_DESC_KEYWORDS = ('top', 'highest', 'most', 'largest', 'maximum', 'worst', 'best', 'max')
+_RANK_DESC_KEYWORDS = ('top', 'highest', 'higest', 'heighest', 'hightest', 'hight', 'most', 'largest', 'maximum', 'worst', 'best', 'max')
 _RANK_ASC_KEYWORDS = ('bottom', 'lowest', 'least', 'smallest', 'minimum', 'min', 'fewest')
 _RANK_KEYWORDS = _RANK_DESC_KEYWORDS + _RANK_ASC_KEYWORDS
 
 _METRIC_KEYWORDS: list[tuple[tuple[str, ...], str]] = [
+    (('surplus after salary', 'surplus', 'revenue minus salary', 'revenue after salary', 'net surplus'), 'SURPLUS'),
+    (('salary-to-revenue ratio', 'salary-to-revenue percentage', 'salary vs revenue %', 'salary vs revenue', 'salary percentage', 'salary burden', 'sal_v_rev', 'tot_sal_v_rev'), 'SAL_V_REV'),
+    (('cost per student', 'student cost', 'salary per student', 'cost per pupil', 'tot_cs', 'cs'), 'CS'),
+    (('fee average', 'average fee', 'average student fee', 'weighted fee average', 'revenue per student', 'tot_fa', 'fa'), 'FA'),
+    (('total employee salary cost', 'employee salary cost', 'employee cost', 'salary cost', 'salary', 'tot_sal', 'sal'), 'SAL'),
+    (('total net revenue', 'net revenue', 'total revenue', 'revenue', 'income', 'earnings', 'tot_rev_n', 'rev_n'), 'REV_N'),
     (('current year zero paid fee due', 'zero paid fee due', 'cy zero paid fee due', 'cy_zp_fd'), 'CY_ZP_FD'),
     (('fee paid but books not purchased', 'fee paid books not purchased', 'fp bn', 'cy_fp_bn'), 'CY_FP_BN'),
     (('fee not paid and books not purchased', 'fee not paid & books not purchased', 'fee not paid books not purchased', 'fn bn', 'cy_fn_bn'), 'CY_FN_BN'),
@@ -36,11 +42,12 @@ _METRIC_KEYWORDS: list[tuple[tuple[str, ...], str]] = [
     (('net strength difference', 'nsd'), 'NSD'),
     (('strength difference', 'sd'), 'SD'),
     (('dropout percentage', 'dropouts percentage', 'drop out percentage',
-      'dropout %', 'dropout percent', 'dpp', 'dropouts %', 'drop out %'), 'DPP'),
-    (('dropout count', 'number of dropouts', 'total dropouts', 'total dropout', 'dropped out', 'dropouts', 'dropout', 'drop out', 'dp'), 'DP'),
+      'dropout %', 'dropout percent', 'dpp', 'dropouts %', 'drop out %', 'doupouts percentage', 'droupouts percentage'), 'DPP'),
+    (('dropout count', 'number of dropouts', 'total dropouts', 'total dropout', 'dropped out', 'dropouts', 'dropout', 'drop out', 'dp',
+      'doupouts', 'droupout', 'drupouts', 'dopout', 'dopouts'), 'DP'),
     (('grant strength', 'gs'), 'GS'),
-    (('student teacher ratio', 'student-teacher ratio', 'teacher ratio', 'str', 'performance gap', 'staff-to-student performance gap'), 'STR'),
-    (('staff count', 'staff strength', 'no of staff', 'number of staff', 'total staff', 'staff', 'sc'), 'SC'),
+    (('student teacher ratio', 'student-teacher ratio', 'teacher ratio', 'str', 'performance gap', 'staff-to-student performance gap', 'tot_str'), 'STR'),
+    (('staff count', 'staff strength', 'no of staff', 'number of staff', 'total staff', 'staff', 'sc', 'tot_sc'), 'SC'),
     (('average strength per section', 'strength per section', 'students per section', 'student per section', 'sps', 'avg-sps', 'avg sps'), 'Avg-SPS'),
     (('number of sections', 'section count', 'sections', 'nos'), 'NOS'),
     (('occupied rooms', 'occupied room', 'occupied', 'noor'), 'NOOR'),
@@ -49,8 +56,9 @@ _METRIC_KEYWORDS: list[tuple[tuple[str, ...], str]] = [
     (('room capacity', 'square feet', 'sq ft', 'arcs'), 'ARCS'),
     (('current-year strength', 'current year strength', 'current strength',
       'previous-year strength', 'previous year strength',
-      'net strength', 'student strength', 'performance', 'overall performance', 'strength', 'ns'), 'NS'),
+      'net strength', 'student strength', 'performance', 'overall performance', 'strength', 'ns', 'tot_ns'), 'NS'),
 ]
+
 
 _LEVEL_PHRASES = {
     'pre primary': 'PP', 'pre-primary': 'PP',
@@ -69,6 +77,8 @@ _YOY_EXPLICIT_PHRASES = (
     'current year vs previous year', 'current year vs last year', 'current year versus last year',
     'current year versus previous year', 'current-year and previous-year', 'current year and previous year',
     'current year and last year', 'current-year and last-year', 'cy vs ly', 'cy versus ly', 'cy vs. ly',
+    'last year and current year', '2024-25 and 2025-26', '2024-25 vs 2025-26',
+    'compare last year and current year', 'compare 2024-25 and 2025-26',
     'year over year', 'year-over-year', 'yoy', 'year on year', 'y-o-y',
     'vs last year', 'versus last year', 'from last year', 'over last year', 'since last year',
     'change from last year', 'gain from last year', 'drop from last year',
@@ -212,7 +222,7 @@ def is_yoy_question(question: str) -> bool:
         return any(phrase in q for phrase in _YOY_EXPLICIT_PHRASES)
     if any(_word(w).search(q) for w in _YOY_CHANGE_WORDS):
         return True
-    if 'compare' in q and any(y in q for y in ('year', 'cy', 'ly', 'annual', 'current-year', 'previous-year')):
+    if 'compare' in q and any(y in q for y in ('year', 'cy', 'ly', 'annual', 'current-year', 'previous-year', '2024-25', '2025-26', 'last year')):
         return True
     return False
 
@@ -304,39 +314,261 @@ def has_ranking_language(question: str) -> bool:
 
 def extract_group_dimension(question: str) -> str | None:
     q = question.lower()
-    if 'zone' in q:
+    has_branch_dim = 'branch' in q or 'branches' in q
+
+    if any(k in q for k in ('branch type', 's_type', 'admission type', 'student type', 's type', 'by type', 'by branch type')):
+        return 's_type'
+
+    if any(k in q for k in ('by zone', 'zone wise', 'zone-wise', 'per zone', 'across zones', 'by zones')) or (
+        'zone' in q and not has_branch_dim and not any(p in q for p in ('in ', 'for ', 'under ', 'within '))
+    ):
         return 'zone'
-    if 'agm' in q:
+
+    if any(k in q for k in ('by agm', 'agm wise', 'agm-wise', 'per agm', 'across agms', 'by agms')) or (
+        'agm' in q and not has_branch_dim and not any(p in q for p in ('in ', 'for ', 'under ', 'within '))
+    ):
         return 'agm'
-    if _word('ri').search(q) or 'ri name' in q or 'regional' in q or 'ris' in q:
+
+    if any(k in q for k in ('by ri', 'ri wise', 'ri-wise', 'per ri', 'across ris', 'by ris')) or (
+        (_word('ri').search(q) or 'regional' in q or 'ris' in q) and not has_branch_dim and not any(p in q for p in ('in ', 'for ', 'under ', 'within '))
+    ):
         return 'ri'
+
     return None
+
+
+def extract_operation(question: str) -> str:
+    """
+    Explicit operation detector returning canonical operation type:
+      'total' | 'count' | 'group_by' | 'ranking' | 'highest_lowest' | 'comparison' | 'difference' | 'threshold' | 'percentage'
+    """
+    q = question.lower()
+    if extract_threshold(q) is not None or any(t in q for t in ('greater than', 'more than', 'exceeding', 'above', 'below', 'less than', 'under', 'crore', 'lakh')):
+        return 'threshold'
+    if is_yoy_question(q) or 'compare' in q or 'versus' in q or ' vs ' in q:
+        return 'comparison'
+    if any(k in q for k in ('difference', 'change', 'gain', 'reduction')):
+        return 'difference'
+    if has_ranking_language(q) or any(k in q for k in ('top', 'bottom', 'rank', 'ranked')):
+        return 'ranking'
+    if any(k in q for k in ('highest', 'lowest', 'best', 'worst', 'most', 'least')):
+        return 'highest_lowest'
+    if extract_group_dimension(q) is not None or 'by branch' in q or 'branch-wise' in q:
+        return 'group_by'
+    if any(k in q for k in ('percentage', 'percent', '%', 'ratio')):
+        return 'percentage'
+    if any(k in q for k in ('count', 'number of', 'how many')):
+        return 'count'
+    return 'total'
 
 
 def extract_aggregation(question: str, default: str = 'sum') -> str:
     q = question.lower()
     if any(p in q for p in ('average', 'avg', 'mean')):
         return 'mean'
-    if any(p in q for p in ('count', 'how many branches', 'number of branches')):
+    if any(p in q for p in ('how many branches', 'number of branches', 'count of branches', 'how many zones', 'how many ris', 'how many agms')):
         return 'count'
     return default
 
 
+def _normalize_entity_string(s: str) -> str:
+    """Strip titles, dots, punctuation, single-letter initials, and normalize whitespace."""
+    s = str(s).lower()
+    s = re.sub(r'^(mr\.|mr\s+|mrs\.|mrs\s+|dr\.|dr\s+)', '', s)
+    s = s.replace('.', ' ').replace('-', ' ')
+    tokens = [t for t in s.split() if len(t) > 1 and t not in ('mr', 'mrs', 'ms', 'dr')]
+    return ' '.join(tokens).strip()
+
+
 def extract_known_values(question: str, values) -> list[str]:
-    """Extract known entity names matching case-insensitively with word boundaries."""
+    """Extract known entity names matching case-insensitively with word boundaries and title/dot flexibility."""
     q = question.lower()
+    q_norm = _normalize_entity_string(question)
     found = []
     seen = set()
+
     for value in sorted({str(v) for v in values if v and str(v).strip()}, key=len, reverse=True):
-        needle = value.strip().lower()
+        raw_val = value.strip()
+        needle = raw_val.lower()
         if not needle or needle in seen:
             continue
+
+        # 1. Exact case-insensitive match (with re.escape)
         if re.search(rf'\b{re.escape(needle)}\b', q):
-            found.append(value)
+            found.append(raw_val)
             seen.add(needle)
+            continue
+
+        # 2. Match without title (e.g. "M.Ramana" for "Mr.M.Ramana")
+        no_title = re.sub(r'^(mr\.|mr\s+|mrs\.|mrs\s+|dr\.|dr\s+)', '', needle, flags=re.IGNORECASE).strip()
+        if no_title and len(no_title) >= 3 and re.search(rf'\b{re.escape(no_title)}\b', q):
+            found.append(raw_val)
+            seen.add(needle)
+            continue
+
+        # 3. Match normalized versions (no dots/extra spaces)
+        val_norm = _normalize_entity_string(raw_val)
+        if val_norm and len(val_norm) >= 3:
+            if re.search(rf'\b{re.escape(val_norm)}\b', q_norm):
+                found.append(raw_val)
+                seen.add(needle)
+                continue
+
     return found
 
 
 def has_any(question: str, phrases) -> bool:
     q = question.lower()
     return any(p in q for p in phrases)
+
+
+def extract_academic_segment(question: str) -> str | None:
+    """Extract academic segment code (PP, LPS, UPS, HS, ACD, AD_AC, TOT) from question."""
+    q = question.lower()
+    if 'lower primary' in q or 'lps' in q:
+        return 'LPS'
+    if 'upper primary' in q or 'ups' in q:
+        return 'UPS'
+    if 'pre primary' in q or 'pre-primary' in q:
+        return 'PP'
+    if 'high school' in q or 'hs' in q:
+        return 'HS'
+    if 'activity' in q or 'admin' in q or 'ad_ac' in q:
+        return 'AD_AC'
+    if 'acd' in q:
+        return 'ACD'
+    if 'primary' in q:
+        return 'PP'
+    return None
+
+
+def extract_target_metric(question: str, metric_param: str | None = None) -> str:
+    """
+    Detects the requested metric intent from the natural language question
+    for output projection across Fee Due, Revenue vs Salary, and Branch Analytics.
+    """
+    q = question.lower()
+    m = (metric_param or '').upper()
+
+    # Fee Due target metrics - check YoY comparison and specific counts first
+    if any(p in q for p in ('compare fee', 'fee yoy', 'fee change', 'fee comparison', 'fee due comparison', 'last year and current year fee', 'compare last year and current year', 'compare 2024-25 and 2025-26')):
+        return 'fee_yoy'
+    if any(p in q for p in ('paid but books not purchased', 'fee paid books not purchased', 'fp bn', 'cy_fp_bn')):
+        return 'CY_FP_BN'
+    if any(p in q for p in ('did not pay fee and did not purchase books', 'fee not paid and books not purchased', 'fee not paid & books not purchased', 'not paid and books not purchased', 'fn bn', 'cy_fn_bn')):
+        return 'CY_FN_BN'
+    if any(p in q for p in ('books not purchased', 'books not bought', 'books summary')):
+        return 'books_summary'
+
+    # Check zero-paid fee amount vs zero-paid count
+    if any(p in q for p in ('zero-paid fee amount', 'zero paid fee amount', 'zero paid fee due amount', 'highest zero-paid fee amount', 'highest zero paid fee amount', 'zero paid fee due', 'cy_zp_fd')) and 'count' not in q:
+        return 'CY_ZP_FD'
+    if any(p in q for p in ('zero paid count', 'zero-paid count', 'zero paid fee count', 'zero paid fee due count', 'zero-paid fee due count', 'highest zero-paid count', 'highest zero paid count', 'cy_zp')) or ('zero paid' in q or 'zero-paid' in q):
+        return 'CY_ZP'
+    if any(p in q for p in ('actual zero paid count', 'actual zero paid', 'cy_a_zp')):
+        return 'CY_A_ZP'
+    if any(p in q for p in ('zero-paid fee amount', 'zero paid fee amount', 'zero paid fee due amount', 'highest zero-paid fee amount', 'highest zero paid fee amount', 'zero paid fee due', 'cy_zp_fd')):
+        return 'CY_ZP_FD'
+
+    # Due count vs Due fee amount
+    if any(p in q for p in ('last year fee due count', 'last year due count', '2024-25 fee due count', '2024-25 due count', 'ly_fdc')):
+        return 'LY_FDC'
+    if any(p in q for p in ('2025-26 live student due count', '2025-26 due count', 'live student due count', 'current year due count', 'cy due count', 'due count', 'cy_a_fdc')):
+        return 'CY_A_FDC'
+
+    if any(p in q for p in ('last year fee due', 'last year 2024-25 fee due', '2024-25 fee due', '2024-25 fee', 'last year due', 'ly_fd')):
+        return 'LY_FD'
+    if any(p in q for p in ('2025-26 live student fee due', '2025-26 fee due', 'live student fee due', 'active fee due', 'current year fee due', 'cy_a_fd', 'cy_fd')):
+        return 'CY_A_FD'
+
+    # Revenue vs Salary target metrics
+    if any(p in q for p in ('employee salary cost', 'employee salary', 'salary cost', 'total employee salary cost')):
+        return 'total_salary'
+    if any(p in q for p in ('student teacher ratio', 'student-teacher ratio', 'str', 'teacher ratio', 'student staff ratio')):
+        return 'student_teacher_ratio'
+    if any(p in q for p in ('cost per student', 'cost per pupil', 'salary per student', 'student cost')):
+        return 'cost_per_student'
+    if any(p in q for p in ('fee average', 'average fee', 'revenue per student')):
+        return 'fee_average'
+    if any(p in q for p in ('salary vs revenue', 'sal vs rev', 'salary ratio', 'salary burden', 'salary percentage', 'salary-to-revenue')):
+        return 'salary_vs_revenue_pct'
+    if any(p in q for p in ('surplus', 'net surplus', 'revenue minus salary', 'revenue after salary')):
+        return 'surplus'
+    if any(p in q for p in ('student count', 'total student', 'total students', 'number of students')):
+        return 'total_students'
+    if any(p in q for p in ('employee count', 'total employee', 'total employees', 'number of employees', 'staff count')):
+        return 'total_employees'
+
+    # Single-word metric checks
+    if 'salary' in q and 'revenue' not in q:
+        return 'total_salary'
+    if 'revenue' in q and 'salary' not in q:
+        return 'total_revenue'
+    if 'students' in q and not any(k in q for k in ('cost', 'ratio', 'fee')):
+        return 'total_students'
+    if 'employees' in q and not any(k in q for k in ('cost', 'ratio', 'salary')):
+        return 'total_employees'
+
+    # Metric parameter fallback
+    if m in ('LY_FD',):
+        return 'LY_FD'
+    if m in ('LY_FDC',):
+        return 'LY_FDC'
+    if m in ('CY_A_FD',):
+        return 'CY_A_FD'
+    if m in ('CY_A_FDC',):
+        return 'CY_A_FDC'
+    if m in ('CY_A_ZP',):
+        return 'CY_A_ZP'
+    if m in ('CY_ZP',):
+        return 'CY_ZP'
+    if m in ('CY_ZP_FD',):
+        return 'CY_ZP_FD'
+    if m in ('CY_FP_BN',):
+        return 'CY_FP_BN'
+    if m in ('CY_FN_BN',):
+        return 'CY_FN_BN'
+    if m in ('NS', 'TOT_NS', 'STUDENTS'):
+        return 'total_students'
+    if m in ('SC', 'TOT_SC', 'EMPLOYEES'):
+        return 'total_employees'
+    if m in ('SAL', 'TOT_SAL', 'SALARY'):
+        return 'total_salary'
+    if m in ('REV_N', 'TOT_REV_N', 'REVENUE'):
+        return 'total_revenue'
+    if m in ('SURPLUS', 'NET_SURPLUS'):
+        return 'surplus'
+    if m in ('CS', 'TOT_CS', 'COST_PER_STUDENT'):
+        return 'cost_per_student'
+    if m in ('FA', 'TOT_FA', 'FEE_AVERAGE'):
+        return 'fee_average'
+    if m in ('SAL_V_REV', 'TOT_SAL_V_REV', 'SALARY_VS_REVENUE'):
+        return 'salary_vs_revenue_pct'
+    if m in ('STR', 'TOT_STR', 'STUDENT_TEACHER_RATIO'):
+        return 'student_teacher_ratio'
+
+    if 'revenue' in q and 'salary' in q:
+        return 'revenue_vs_salary'
+
+    return 'summary'
+
+
+def extract_compared_segments(question: str) -> list[str]:
+    """Extract segment codes mentioned in comparison questions (e.g. PP, LPS, UPS, HS, ACD, AD_AC)."""
+    q = question.lower()
+    found = []
+    if 'pre primary' in q or 'pre-primary' in q or 'pp' in q.split():
+        found.append('PP')
+    if 'lower primary' in q or 'lps' in q.split():
+        found.append('LPS')
+    if 'upper primary' in q or 'ups' in q.split():
+        found.append('UPS')
+    if 'high school' in q or 'hs' in q.split():
+        found.append('HS')
+    if 'activity' in q or 'admin' in q or 'ad_ac' in q:
+        found.append('AD_AC')
+    if 'acd' in q.split():
+        found.append('ACD')
+    return found
+
+

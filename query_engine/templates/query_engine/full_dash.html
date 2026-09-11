@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Executive Analyst — Full Page Assistant</title>
+  <!-- Google Fonts & Marked for Markdown Rendering -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: #f8fafc;
+      color: #0f172a;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* Top Navigation Bar */
+    header {
+      background: #ffffff;
+      border-bottom: 1px solid #e2e8f0;
+      padding: 14px 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+    }
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .brand-icon {
+      width: 32px;
+      height: 32px;
+      background: linear-gradient(135deg, #2563eb, #1d4ed8);
+      color: white;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 16px;
+    }
+
+    .header-title {
+      font-size: 18px;
+      font-weight: 700;
+      color: #0f172a;
+      letter-spacing: -0.3px;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #059669;
+      background: #ecfdf5;
+      border: 1px solid #a7f3d0;
+      padding: 3px 10px;
+      border-radius: 12px;
+    }
+
+    .back-btn {
+      color: #475569;
+      background: #f1f5f9;
+      border: 1px solid #cbd5e1;
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      text-decoration: none;
+      transition: all 0.2s;
+    }
+
+    .back-btn:hover {
+      color: white;
+      background: #2563eb;
+      border-color: #2563eb;
+    }
+
+    /* Main Flex Workspace */
+    .workspace {
+      flex: 1;
+      display: flex;
+      height: calc(100vh - 65px);
+      overflow: hidden;
+    }
+
+    /* Left Prompt Suggestions Sidebar */
+    .prompt-sidebar {
+      width: 320px;
+      background: #ffffff;
+      border-right: 1px solid #e2e8f0;
+      padding: 20px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      flex-shrink: 0;
+    }
+
+    .sidebar-section-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: #2563eb;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+    }
+
+    .prompt-card {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 12.5px;
+      color: #334155;
+      cursor: pointer;
+      transition: all 0.2s;
+      margin-bottom: 8px;
+      line-height: 1.4;
+      font-weight: 500;
+    }
+
+    .prompt-card:hover {
+      background: #eff6ff;
+      color: #1d4ed8;
+      border-color: #bfdbfe;
+      transform: translateY(-1px);
+    }
+
+    /* Central Chat Stream */
+    .chat-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      background: #f8fafc;
+    }
+
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .msg-bubble {
+      max-width: 90%;
+      border-radius: 12px;
+      padding: 16px 20px;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .user-msg {
+      align-self: flex-end;
+      background: #2563eb;
+      color: white;
+      border-bottom-right-radius: 2px;
+      box-shadow: 0 2px 4px rgba(37, 99, 235, 0.15);
+    }
+
+    .assistant-msg {
+      align-self: flex-start;
+      background: #ffffff;
+      color: #0f172a;
+      border: 1px solid #e2e8f0;
+      border-bottom-left-radius: 2px;
+      width: 100%;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+
+    .assistant-msg table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 14px 0;
+      font-size: 13px;
+    }
+
+    .assistant-msg th, .assistant-msg td {
+      border: 1px solid #cbd5e1;
+      padding: 10px 14px;
+      text-align: left;
+    }
+
+    .assistant-msg th {
+      background: #f1f5f9;
+      color: #1e293b;
+      font-weight: 700;
+    }
+
+    .function-tag {
+      display: inline-block;
+      font-size: 11px;
+      font-family: monospace;
+      color: #1d4ed8;
+      background: #eff6ff;
+      padding: 3px 8px;
+      border-radius: 4px;
+      margin-bottom: 10px;
+      border: 1px solid #bfdbfe;
+      font-weight: 600;
+    }
+
+    /* Input Footer Area */
+    .input-footer {
+      padding: 20px 32px;
+      background: #ffffff;
+      border-top: 1px solid #e2e8f0;
+    }
+
+    .input-form {
+      display: flex;
+      gap: 12px;
+    }
+
+    .chat-input {
+      flex: 1;
+      background: #f8fafc;
+      border: 1px solid #cbd5e1;
+      color: #0f172a;
+      padding: 14px 18px;
+      border-radius: 10px;
+      font-size: 14px;
+      outline: none;
+      transition: border 0.2s;
+    }
+
+    .chat-input:focus {
+      border-color: #2563eb;
+      background: #ffffff;
+    }
+
+    .voice-lang-select {
+      background: #f8fafc;
+      border: 1px solid #cbd5e1;
+      color: #334155;
+      padding: 0 10px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 600;
+      outline: none;
+      cursor: pointer;
+    }
+
+    .mic-btn {
+      background: #f1f5f9;
+      border: 1px solid #cbd5e1;
+      color: #334155;
+      width: 44px;
+      height: 44px;
+      border-radius: 10px;
+      font-size: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      flex-shrink: 0;
+    }
+
+    .mic-btn:hover {
+      background: #eff6ff;
+      border-color: #2563eb;
+      color: #2563eb;
+    }
+
+    .mic-btn.listening {
+      background: #fef2f2;
+      border-color: #dc2626;
+      color: #dc2626;
+      animation: pulse 1.5s infinite;
+    }
+
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.4); }
+      70% { box-shadow: 0 0 0 8px rgba(220, 38, 38, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); }
+    }
+
+    .voice-status {
+      font-size: 12px;
+      color: #059669;
+      font-weight: 600;
+      margin-top: 6px;
+      min-height: 18px;
+    }
+
+    .voice-status.error {
+      color: #dc2626;
+    }
+
+    .send-btn {
+      background: #2563eb;
+      color: white;
+      border: none;
+      padding: 0 24px;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .send-btn:hover {
+      background: #1d4ed8;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Navigation Bar -->
+  <header>
+    <div class="header-left">
+      <div class="brand-icon">B</div>
+      <span class="header-title">AI Executive Analyst</span>
+      <span class="status-badge">🟢 Online</span>
+    </div>
+    <a href="http://127.0.0.1:8000/" class="back-btn">← Back to Dashboard</a>
+  </header>
+
+  <!-- Workspace Container -->
+  <div class="workspace">
+    
+    <!-- Sidebar Prompt Templates -->
+    <aside class="prompt-sidebar">
+      <div>
+        <div class="sidebar-section-title">📊 Rankings & Dropouts</div>
+        <div class="prompt-card" onclick="askPrompt('Which are the top 5 branches by dropout percentage?')">Top 5 branches by dropout percentage</div>
+        <div class="prompt-card" onclick="askPrompt('Show dropout percentage by zone.')">Show dropout percentage by zone</div>
+        <div class="prompt-card" onclick="askPrompt('Which branches have dropout percentage above 15%?')">Branches with dropout > 15%</div>
+        <div class="prompt-card" onclick="askPrompt('Which branches had the biggest reduction in dropouts?')">Biggest reduction in dropouts</div>
+      </div>
+
+      <div>
+        <div class="sidebar-section-title">💰 Fee Due Analysis</div>
+        <div class="prompt-card" onclick="askPrompt('What is the total active fee due for 2025-26?')">Total 2025-26 active fee due</div>
+        <div class="prompt-card" onclick="askPrompt('Which branches have the highest zero-paid fee amount?')">Highest zero-paid fee amount</div>
+        <div class="prompt-card" onclick="askPrompt('Compare 2024-25 and 2025-26 fee due by branch.')">Compare 2024-25 vs 2025-26 fee due</div>
+      </div>
+
+      <div>
+        <div class="sidebar-section-title">🏢 Revenue vs Salary</div>
+        <div class="prompt-card" onclick="askPrompt('What is total salary cost?')">Total salary cost</div>
+        <div class="prompt-card" onclick="askPrompt('What is the total employee count?')">Total employee count</div>
+        <div class="prompt-card" onclick="askPrompt('Show top 5 branches by net revenue.')">Top 5 branches by net revenue</div>
+        <div class="prompt-card" onclick="askPrompt('Compare revenue vs salary across all academic segments.')">Academic segment comparison</div>
+      </div>
+
+      <div>
+        <div class="sidebar-section-title">🏫 Level & Category YoY</div>
+        <div class="prompt-card" onclick="askPrompt('Compare dropout percentage between PP, PS and HS.')">Compare PP, PS and HS dropouts</div>
+        <div class="prompt-card" onclick="askPrompt('Which category improved the most compared with last year?')">Most improved academic category</div>
+      </div>
+    </aside>
+
+    <!-- Main Chat Workspace -->
+    <main class="chat-area">
+      <div id="chat-messages" class="chat-messages">
+        <div class="msg-bubble assistant-msg">
+          Welcome to the <strong>Full-Page AI Executive Assistant</strong>! Ask any question or select a prompt template from the left panel to execute instant analytical queries across your datasets.
+        </div>
+      </div>
+
+      <!-- Input Footer -->
+      <div class="input-footer">
+        <form id="chat-form" class="input-form" onsubmit="handleSend(event)">
+          <select id="voice-lang" class="voice-lang-select" title="Voice Input Language">
+            <option value="en-IN">EN (English)</option>
+            <option value="te-IN">TE (తెలుగు)</option>
+          </select>
+          <button type="button" id="mic-btn" class="mic-btn" title="Click to speak">🎤</button>
+          <input type="text" id="chat-input" class="chat-input" placeholder="Type your analytics prompt or click 🎤 to speak..." autocomplete="off" />
+          <button type="submit" class="send-btn">Execute Query</button>
+        </form>
+        <div id="voice-status" class="voice-status"></div>
+      </div>
+    </main>
+
+  </div>
+
+  <script>
+    const chatMessages = document.getElementById('chat-messages');
+    const chatInput = document.getElementById('chat-input');
+    const micBtn = document.getElementById('mic-btn');
+    const voiceLangSelect = document.getElementById('voice-lang');
+    const voiceStatus = document.getElementById('voice-status');
+
+    function appendMessage(text, isUser = false, functionName = null) {
+      const div = document.createElement('div');
+      div.className = `msg-bubble ${isUser ? 'user-msg' : 'assistant-msg'}`;
+      
+      if (!isUser) {
+        let html = '';
+        if (functionName) {
+          html += `<div class="function-tag">⚡ Engine Capability: ${functionName}</div>`;
+        }
+        html += marked.parse(text);
+        div.innerHTML = html;
+      } else {
+        div.textContent = text;
+      }
+
+      chatMessages.appendChild(div);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    async function sendQuestion(question) {
+      if (!question.trim()) return;
+
+      appendMessage(question, true);
+      chatInput.value = '';
+
+      const loadingDiv = document.createElement('div');
+      loadingDiv.className = 'msg-bubble assistant-msg';
+      loadingDiv.textContent = 'Executing query across analytical primitives...';
+      chatMessages.appendChild(loadingDiv);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+
+      try {
+        const response = await fetch('/api/query/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            question: question,
+            filters: { agm: 'All', ri: 'All', zone: 'All', branches: ['All'] }
+          })
+        });
+
+        const data = await response.json();
+        chatMessages.removeChild(loadingDiv);
+
+        if (data.answer) {
+          appendMessage(data.answer, false, data.function);
+        } else {
+          appendMessage('Sorry, no answer could be derived for this question.', false);
+        }
+      } catch (err) {
+        chatMessages.removeChild(loadingDiv);
+        appendMessage(`Error: ${err.message}`, false);
+      }
+    }
+
+    function handleSend(e) {
+      e.preventDefault();
+      sendQuestion(chatInput.value);
+    }
+
+    function askPrompt(q) {
+      sendQuestion(q);
+    }
+
+    // Voice Input Integration (Web Speech API)
+    const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!SpeechRecognitionCtor) {
+      if (micBtn) {
+        micBtn.disabled = true;
+        micBtn.title = "Voice input is not supported in this browser";
+      }
+    } else {
+      const recognition = new SpeechRecognitionCtor();
+      recognition.interimResults = true;
+      recognition.maxAlternatives = 1;
+
+      let isListening = false;
+      let finalTranscript = "";
+
+      recognition.onstart = function () {
+        isListening = true;
+        finalTranscript = "";
+        micBtn.classList.add('listening');
+        setVoiceStatus("Listening...");
+      };
+
+      recognition.onresult = function (event) {
+        let interim = "";
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalTranscript += transcript;
+          } else {
+            interim += transcript;
+          }
+        }
+        chatInput.value = (finalTranscript + interim).trim();
+      };
+
+      recognition.onerror = function (event) {
+        let message = "Voice input error. Please try again or type your question.";
+        if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+          message = "Microphone permission was denied.";
+        } else if (event.error === "no-speech") {
+          message = "No speech detected. Please try again.";
+        } else if (event.error === "network") {
+          message = "Network error during voice recognition.";
+        }
+        setVoiceStatus(message, true);
+      };
+
+      recognition.onend = function () {
+        isListening = false;
+        micBtn.classList.remove('listening');
+
+        const question = finalTranscript.trim();
+        finalTranscript = "";
+
+        if (!question) return;
+
+        chatInput.value = question;
+        const lang = voiceLangSelect ? voiceLangSelect.value : 'en-IN';
+
+        if (lang === 'te-IN') {
+          setVoiceStatus("Translating...");
+          translateTeluguToEnglish(question)
+            .then(englishText => {
+              const finalQuery = englishText || question;
+              chatInput.value = finalQuery;
+              setVoiceStatus("");
+              sendQuestion(finalQuery);
+            })
+            .catch(() => {
+              setVoiceStatus("Translation unavailable, sending raw transcript.", true);
+              sendQuestion(question);
+            });
+        } else {
+          setVoiceStatus("");
+          sendQuestion(question);
+        }
+      };
+
+      if (micBtn) {
+        micBtn.addEventListener('click', function () {
+          if (isListening) {
+            recognition.stop();
+            return;
+          }
+          setVoiceStatus("");
+          recognition.lang = voiceLangSelect ? voiceLangSelect.value : 'en-IN';
+          try {
+            recognition.start();
+          } catch (err) {}
+        });
+      }
+    }
+
+    function setVoiceStatus(msg, isError = false) {
+      if (!voiceStatus) return;
+      voiceStatus.textContent = msg || "";
+      if (isError) {
+        voiceStatus.classList.add('error');
+      } else {
+        voiceStatus.classList.remove('error');
+      }
+    }
+
+    async function translateTeluguToEnglish(text) {
+      const res = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=te|en`);
+      if (!res.ok) throw new Error("Translation failed");
+      const data = await res.json();
+      return data?.responseData?.translatedText || text;
+    }
+  </script>
+</body>
+</html>
