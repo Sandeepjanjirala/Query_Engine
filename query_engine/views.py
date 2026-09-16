@@ -102,6 +102,78 @@ class HealthView(APIView):
         return Response({'success': True, 'service': 'branch-query-engine'})
 
 
+import logging
+from rest_framework.parsers import MultiPartParser, FormParser
+from speech import transcribe_audio
+
+logger = logging.getLogger(__name__)
+
+
+class TranscribeAudioView(APIView):
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        audio_file = request.FILES.get('audio') or request.FILES.get('file')
+        if not audio_file:
+            return Response({
+                'success': False,
+                'error': 'No audio file provided. Please record your speech and try again.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        if audio_file.size > 25 * 1024 * 1024:
+            return Response({
+                'success': False,
+                'error': 'Audio recording exceeds maximum allowed size.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        if audio_file.size == 0:
+            return Response({
+                'success': False,
+                'error': 'Audio recording is empty. Please try speaking again.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Detect audio container extension
+        filename = getattr(audio_file, 'name', '') or ''
+        content_type = getattr(audio_file, 'content_type', '') or ''
+        if 'wav' in content_type or filename.endswith('.wav'):
+            ext = '.wav'
+        elif 'mp4' in content_type or filename.endswith('.mp4') or filename.endswith('.m4a'):
+            ext = '.mp4'
+        elif 'ogg' in content_type or filename.endswith('.ogg'):
+            ext = '.ogg'
+        else:
+            ext = '.webm'
+
+        try:
+            raw_text, normalized_text, duration = transcribe_audio(audio_file, extension=ext, language='en')
+            if not normalized_text.strip():
+                return Response({
+                    'success': False,
+                    'error': 'Could not understand the audio. Please try again.'
+                }, status=status.HTTP_200_OK)
+
+            from django.conf import settings
+            resp_data = {
+                'success': True,
+                'text': normalized_text,
+                'raw_text': raw_text,
+                'duration': round(duration, 2),
+            }
+            if getattr(settings, 'VOICE_DEBUG_MODE', False):
+                resp_data['debug'] = {
+                    'raw': raw_text,
+                    'normalized': normalized_text,
+                    'duration_sec': round(duration, 2),
+                }
+            return Response(resp_data)
+        except Exception as exc:
+            logger.exception("Local speech transcription error: %s", exc)
+            return Response({
+                'success': False,
+                'error': 'Could not understand the audio. Please try again.'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 def dashboard_view(request):
     return render(request, 'query_engine/index.html')
 

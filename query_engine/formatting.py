@@ -1,3 +1,10 @@
+from .analysis_engine import (
+    AnalysisResult,
+    build_group_analysis,
+    build_lookup_analysis,
+    build_ranking_analysis,
+    build_ri_analysis,
+)
 from .glossary import ABBREVIATIONS
 from .metric_registry import get_default_metric_registry
 
@@ -9,146 +16,97 @@ _EXTRA_LABELS = {
 
 
 def _metric_label(metric: str) -> str:
-    spec = get_default_metric_registry().get(metric)
-    if spec:
-        return spec.display_name
-    return ABBREVIATIONS.get(metric) or _EXTRA_LABELS.get(metric, metric)
+    from .analysis_engine import get_clean_metric_label
+    return get_clean_metric_label(metric)
 
 
-def format_top_5_dropout(results: list[dict]) -> str:
+def render_operation_response(analysis: AnalysisResult) -> str:
+    lines = []
+
+    if analysis.operation == 'analysis':
+        if analysis.direct_answer:
+            lines.append(analysis.direct_answer)
+            lines.append("")
+
+        for sec in analysis.sections:
+            lines.append(f"### {sec['title']}")
+            lines.append(sec['content'])
+            lines.append("")
+
+        if analysis.headers:
+            evidence_heading = getattr(analysis, 'evidence_title', None) or "Detailed Branch Data"
+            lines.append(f"### {evidence_heading}")
+            lines.append("")
+            hdr_line = "| " + " | ".join(analysis.headers) + " |"
+            sep_line = "| " + " | ".join(["---"] * len(analysis.headers)) + " |"
+            lines.append(hdr_line)
+            lines.append(sep_line)
+            for row in analysis.rows:
+                lines.append("| " + " | ".join(row) + " |")
+            lines.append("")
+
+        return "\n".join(lines).strip()
+
+    if analysis.operation == 'lookup':
+        return analysis.direct_answer
+
+    # For ranking, group_by, threshold, yoy operations
+    if analysis.direct_answer:
+        lines.append(analysis.direct_answer)
+        lines.append("")
+
+    if analysis.headers and analysis.rows:
+        lines.append("### Detailed Evidence")
+        lines.append("")
+        hdr_line = "| " + " | ".join(analysis.headers) + " |"
+        sep_line = "| " + " | ".join(["---"] * len(analysis.headers)) + " |"
+        lines.append(hdr_line)
+        lines.append(sep_line)
+        for row in analysis.rows:
+            lines.append("| " + " | ".join(row) + " |")
+        lines.append("")
+
+    return "\n".join(lines).strip()
+
+
+def render_5_layer_response(analysis: AnalysisResult) -> str:
+    return render_operation_response(analysis)
+
+
+def format_top_5_dropout(results: list[dict], context: dict | None = None, is_fallback: bool = False) -> str:
     if not results:
         return 'No branch dropout data is available.'
-
-    lines = [
-        'Top 5 branches with the highest dropout percentage:',
-        '| Rank | Branch | Current Year | Last Year | Change |',
-        '| --- | --- | --- | --- | --- |'
-    ]
-    for item in results:
-        cy = item.get('current_year', item.get('dropout_percentage', 0))
-        ly = item.get('previous_year', 0)
-        diff = item.get('difference', item.get('change', cy - ly))
-        sign = '+' if diff >= 0 else ''
-        lines.append(f"| {item['rank']} | {item['branch']} | {cy:.2f}% | {ly:.2f}% | {sign}{diff:.2f} pp |")
-    return '\n'.join(lines)
+    analysis = build_ranking_analysis(results, metric='CY-DPP', ascending=False, group_dimension='Branch', context=context, is_fallback=is_fallback)
+    return render_operation_response(analysis)
 
 
-def format_ranked_branches(results: list[dict], metric: str, ascending: bool) -> str:
+def format_ranked_branches(results: list[dict], metric: str, ascending: bool, context: dict | None = None, is_fallback: bool = False) -> str:
     if not results:
         return f'No data is available for {_metric_label(metric)} with the current filters.'
-    heading = 'lowest' if ascending else 'highest'
-    spec = get_default_metric_registry().get(metric)
-    is_pct = (spec and spec.data_type == 'percentage') or 'dpp' in metric.lower() or 'pct' in metric.lower() or 'percent' in metric.lower()
-    is_count = (spec and spec.data_type == 'integer') or metric in ('DP', 'CY-DP', 'LY-DP', 'NOS', 'NOCR', 'NOOR', 'NOVR', 'SC', 'CY-SC', 'LY-SC', 'CY_A_FDC', 'LY_FDC', 'CY_ZP', 'CY_A_ZP')
+    analysis = build_ranking_analysis(results, metric=metric, ascending=ascending, group_dimension='Branch', context=context, is_fallback=is_fallback)
+    return render_operation_response(analysis)
 
-    unit = '%' if is_pct else ''
-    diff_unit = ' pp' if is_pct else ''
 
-    if results and 'current_year' in results[0]:
-        lines = [
-            f'Branches ranked by {_metric_label(metric)} ({heading} first):',
-            '| Rank | Branch | Current Year | Last Year | Change |',
-            '| --- | --- | --- | --- | --- |'
-        ]
-        for item in results:
-            cy = item['current_year']
-            ly = item.get('previous_year', 0)
-            diff = item.get('difference', cy - ly)
-            sign = '+' if diff >= 0 else ''
+def format_group_aggregate(results: list[dict], metric: str, group_dimension: str, agg: str, context: dict | None = None, is_fallback: bool = False, year: str | None = None) -> str:
+    dim_hdr = group_dimension.upper() if group_dimension.lower() in ('ri', 'agm') else group_dimension.title()
+    if not results:
+        return f'No data is available to aggregate {_metric_label(metric)} by {dim_hdr}.'
+    analysis = build_group_analysis(results, metric=metric, group_dimension=group_dimension, context=context, is_fallback=is_fallback, year=year)
+    return render_operation_response(analysis)
 
-            if is_count:
-                cy_str = f"{int(round(cy)):,}"
-                ly_str = f"{int(round(ly)):,}"
-                diff_str = f"{sign}{int(round(diff)):,}"
-            elif is_pct:
-                cy_str = f"{cy:.2f}%"
-                ly_str = f"{ly:.2f}%"
-                diff_str = f"{sign}{diff:.2f} pp"
-            else:
-                cy_str = f"{cy:.2f}{unit}"
-                ly_str = f"{ly:.2f}{unit}"
-                diff_str = f"{sign}{diff:.2f}{diff_unit}"
 
-            lines.append(
-                f"| {item['rank']} | {item['branch']} | {cy_str} | {ly_str} | {diff_str} |"
-            )
-        return '\n'.join(lines)
-
-    lines = [f'Branches ranked by {_metric_label(metric)} ({heading} first):']
-    for item in results:
-        val = item['value']
-        val_str = f"{int(round(val)):,}" if is_count else f"{val:.2f}{unit}"
-        lines.append(f"{item['rank']}. {item['branch']} — {val_str}")
-    return '\n'.join(lines)
+def format_year_over_year(results: list[dict], metric: str = 'NS', context: dict | None = None) -> str:
+    if not results:
+        return f'No year-over-year data is available for {_metric_label(metric)}.'
+    analysis = build_ranking_analysis(results, metric=metric, ascending=False, group_dimension='Branch', operation='yoy', context=context)
+    return render_operation_response(analysis)
 
 
 def format_branch_lookup(results: list[dict], columns: list[str]) -> str:
     if not results:
         return 'No matching branch data found for the current filters.'
-    lines = []
-    for entry in results:
-        parts = []
-        for col in columns:
-            val = entry.get(col)
-            spec = get_default_metric_registry().get(col)
-            unit = '%' if (spec and spec.data_type == 'percentage') or 'dpp' in col.lower() or 'pct' in col.lower() else ''
-            val_str = f"{val:.2f}{unit}" if isinstance(val, (int, float)) else str(val)
-            parts.append(f"{_metric_label(col)}: {val_str}")
-        lines.append(f"{entry['branch']} — " + ', '.join(parts))
-    return '\n'.join(lines)
-
-
-def format_group_aggregate(results: list[dict], metric: str, group_dimension: str, agg: str) -> str:
-    if not results:
-        return f'No data is available to aggregate {_metric_label(metric)} by {group_dimension}.'
-    spec = get_default_metric_registry().get(metric)
-    unit = '%' if (spec and spec.data_type == 'percentage') or 'dpp' in metric.lower() or 'pct' in metric.lower() else ''
-    diff_unit = ' pp' if unit == '%' else ''
-
-    if results and 'current_year' in results[0]:
-        lines = [
-            f'{_metric_label(metric)} by {group_dimension}:',
-            f'| {group_dimension.title()} | Current Year | Last Year | Difference |',
-            '| --- | --- | --- | --- |'
-        ]
-        for item in results:
-            cy = item['current_year']
-            ly = item.get('previous_year', 0)
-            diff = item.get('difference', cy - ly)
-            sign = '+' if diff >= 0 else ''
-            lines.append(
-                f"| {item['group']} | {cy:.2f}{unit} | {ly:.2f}{unit} | {sign}{diff:.2f}{diff_unit} |"
-            )
-        return '\n'.join(lines)
-
-    verb = {'sum': 'Total', 'mean': 'Average', 'count': 'Count of'}.get(agg, 'Total')
-    if unit == '%':
-        verb = 'Average'
-    lines = [f'{verb} {_metric_label(metric)} by {group_dimension}:']
-    for item in results:
-        lines.append(f"{item['group']} — {item['value']:.2f}{unit}")
-    return '\n'.join(lines)
-
-
-def format_year_over_year(results: list[dict], metric: str) -> str:
-    if not results:
-        return f'No year-over-year data is available for {_metric_label(metric)}.'
-    spec = get_default_metric_registry().get(metric)
-    unit = ' pp' if (spec and spec.data_type == 'percentage') or 'dpp' in metric.lower() or 'pct' in metric.lower() else ''
-
-    lines = [
-        f'Branches ranked by change in {_metric_label(metric)} (current year vs last year):',
-        '| Rank | Branch | Current Year | Last Year | Difference |',
-        '| --- | --- | --- | --- | --- |'
-    ]
-    for item in results:
-        sign = '+' if item.get('change', item.get('difference', 0)) >= 0 else ''
-        ly = item.get('last_year', item.get('previous_year', 0))
-        diff = item.get('change', item.get('difference', 0))
-        lines.append(
-            f"| {item['rank']} | {item['branch']} | {item['current_year']:.2f} | {ly:.2f} | {sign}{diff:.2f}{unit} |"
-        )
-    return '\n'.join(lines)
+    analysis = build_lookup_analysis(results, columns=columns)
+    return render_operation_response(analysis)
 
 
 def format_staff_summary(results: list[dict], columns: list[str]) -> str:
@@ -216,11 +174,13 @@ def format_threshold_result(res: dict, metric: str) -> str:
     spec = get_default_metric_registry().get(metric)
     unit = '%' if (spec and spec.data_type == 'percentage') or 'dpp' in metric.lower() or 'pct' in metric.lower() else ''
     diff_unit = ' pp' if unit == '%' else ''
-    entity_hdr = res['group_column'].title() if res.get('group_column') else 'Branch'
+    g_col = res.get('group_column') or 'Branch'
+    entity_hdr = g_col.upper() if g_col.lower() in ('ri', 'agm') else g_col.title()
 
     if res['records'] and 'current_year' in res['records'][0]:
         lines = [
             f"{count} {target_entity} with {_metric_label(metric)} {op_symbol} {res['threshold']}:",
+            "",
             f'| Rank | {entity_hdr} | Current Year | Last Year | Difference |',
             '| --- | --- | --- | --- | --- |'
         ]
@@ -251,6 +211,7 @@ def format_dimension_comparison(res: dict, metric: str, dimension_type: str) -> 
 
         lines = [
             f"{_metric_label(metric)} CY vs LY by {dimension_type}:",
+            "",
             '| Category | Current Year | Last Year | Difference |',
             '| --- | --- | --- | --- |'
         ]
@@ -277,6 +238,7 @@ def format_dimension_comparison(res: dict, metric: str, dimension_type: str) -> 
 
     lines = [
         f"{_metric_label(metric)} comparison across {dimension_type}:",
+        "",
         '| Category | Current Year | Last Year | Difference |',
         '| --- | --- | --- | --- |'
     ]

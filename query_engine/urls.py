@@ -4,11 +4,13 @@ from .views import (
     FilterOptionsView,
     HealthView,
     QueryView,
+    TranscribeAudioView,
     dashboard_view,
     full_dash_view,
 )
 
 urlpatterns = [
+    path('transcribe/', TranscribeAudioView.as_view(), name='transcribe'),
     path('query/', QueryView.as_view(), name='query'),
     path('filters/', FilterOptionsView.as_view(), name='filters'),
     path('health/', HealthView.as_view(), name='health'),

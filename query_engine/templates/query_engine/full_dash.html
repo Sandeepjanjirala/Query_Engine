@@ -163,6 +163,8 @@
       display: flex;
       flex-direction: column;
       gap: 20px;
+      position: relative;
+      overflow-anchor: none;
     }
 
     .msg-bubble {
@@ -189,6 +191,138 @@
       border-bottom-left-radius: 2px;
       width: 100%;
       box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+
+    /* Markdown Heading & Typography Hierarchy */
+    .assistant-msg h1 {
+      font-size: 20px;
+      font-weight: 800;
+      color: #0f172a;
+      letter-spacing: -0.3px;
+      margin: 6px 0 16px 0;
+      padding-bottom: 8px;
+      border-bottom: 2px solid #2563eb;
+      line-height: 1.3;
+    }
+
+    .assistant-msg h2 {
+      font-size: 17.5px;
+      font-weight: 700;
+      color: #0f172a;
+      letter-spacing: -0.2px;
+      margin: 20px 0 10px 0;
+      padding-bottom: 6px;
+      border-bottom: 1.5px solid #e2e8f0;
+      line-height: 1.35;
+    }
+
+    /* Top Report Title when formatted as h3 */
+    .assistant-msg > h3:first-child,
+    .assistant-msg > .function-tag + h3 {
+      margin-top: 4px;
+      margin-bottom: 14px;
+      padding: 0 0 6px 0;
+      border-left: none;
+      background: none;
+      border-radius: 0;
+      border-bottom: 2px solid #2563eb;
+      color: #0f172a;
+      font-size: 18px;
+      font-weight: 800;
+      line-height: 1.35;
+    }
+
+    /* General h3 headings (e.g. section headings in single-domain reports) */
+    .assistant-msg h3 {
+      font-size: 16px;
+      font-weight: 700;
+      color: #0f172a;
+      letter-spacing: -0.2px;
+      margin: 22px 0 10px 0;
+      line-height: 1.35;
+      border-left: 3.5px solid #2563eb;
+      padding: 3px 0 3px 10px;
+      background: rgba(37, 99, 235, 0.04);
+      border-radius: 0 4px 4px 0;
+    }
+
+    /* Main Section Headings (e.g. "1. About This RI", "2. Overall Dropout Situation", etc.) */
+    .assistant-msg h4 {
+      font-size: 15px;
+      font-weight: 700;
+      color: #0f172a;
+      letter-spacing: -0.15px;
+      margin: 20px 0 10px 0;
+      line-height: 1.4;
+      border-left: 3.5px solid #2563eb;
+      padding: 3px 0 3px 10px;
+      background: rgba(37, 99, 235, 0.04);
+      border-radius: 0 4px 4px 0;
+    }
+
+    .assistant-msg h5 {
+      font-size: 13.5px;
+      font-weight: 600;
+      color: #475569;
+      margin: 14px 0 6px 0;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+
+    .assistant-msg h6 {
+      font-size: 13px;
+      font-weight: 600;
+      color: #64748b;
+      margin: 10px 0 4px 0;
+    }
+
+    .assistant-msg p {
+      margin-bottom: 10px;
+      line-height: 1.65;
+      color: #334155;
+    }
+
+    .assistant-msg p:last-child {
+      margin-bottom: 0;
+    }
+
+    .assistant-msg ul,
+    .assistant-msg ol {
+      margin: 8px 0 12px 20px;
+      padding-left: 4px;
+    }
+
+    .assistant-msg li {
+      margin-bottom: 5px;
+      line-height: 1.55;
+      color: #334155;
+    }
+
+    .assistant-msg li > p {
+      margin-bottom: 4px;
+    }
+
+    .assistant-msg li:last-child {
+      margin-bottom: 0;
+    }
+
+    .assistant-msg strong,
+    .assistant-msg b {
+      font-weight: 600;
+      color: #0f172a;
+    }
+
+    .assistant-msg hr {
+      border: none;
+      border-top: 1px solid #e2e8f0;
+      margin: 18px 0;
+    }
+
+    .assistant-msg blockquote {
+      border-left: 3px solid #cbd5e1;
+      padding-left: 10px;
+      margin: 10px 0;
+      color: #64748b;
     }
 
     .assistant-msg table {
@@ -362,10 +496,7 @@
 
       <div>
         <div class="sidebar-section-title">🏢 Revenue vs Salary</div>
-        <div class="prompt-card" onclick="askPrompt('What is total salary cost?')">Total salary cost</div>
         <div class="prompt-card" onclick="askPrompt('What is the total employee count?')">Total employee count</div>
-        <div class="prompt-card" onclick="askPrompt('Show top 5 branches by net revenue.')">Top 5 branches by net revenue</div>
-        <div class="prompt-card" onclick="askPrompt('Compare revenue vs salary across all academic segments.')">Academic segment comparison</div>
       </div>
 
       <div>
@@ -387,8 +518,7 @@
       <div class="input-footer">
         <form id="chat-form" class="input-form" onsubmit="handleSend(event)">
           <select id="voice-lang" class="voice-lang-select" title="Voice Input Language">
-            <option value="en-IN">EN (English)</option>
-            <option value="te-IN">TE (తెలుగు)</option>
+            <option value="en-IN">EN (Indian English)</option>
           </select>
           <button type="button" id="mic-btn" class="mic-btn" title="Click to speak">🎤</button>
           <input type="text" id="chat-input" class="chat-input" placeholder="Type your analytics prompt or click 🎤 to speak..." autocomplete="off" />
@@ -407,6 +537,17 @@
     const voiceLangSelect = document.getElementById('voice-lang');
     const voiceStatus = document.getElementById('voice-status');
 
+    function scrollToStart(elem) {
+      if (!chatMessages || !elem) return;
+      function go() {
+        chatMessages.scrollTop = Math.max(0, elem.offsetTop - 10);
+      }
+      go();
+      requestAnimationFrame(go);
+      setTimeout(go, 50);
+      setTimeout(go, 200);
+    }
+
     function appendMessage(text, isUser = false, functionName = null) {
       const div = document.createElement('div');
       div.className = `msg-bubble ${isUser ? 'user-msg' : 'assistant-msg'}`;
@@ -423,7 +564,7 @@
       }
 
       chatMessages.appendChild(div);
-      chatMessages.scrollTop = chatMessages.scrollHeight;
+      scrollToStart(div);
     }
 
     async function sendQuestion(question) {
@@ -436,7 +577,7 @@
       loadingDiv.className = 'msg-bubble assistant-msg';
       loadingDiv.textContent = 'Executing query across analytical primitives...';
       chatMessages.appendChild(loadingDiv);
-      chatMessages.scrollTop = chatMessages.scrollHeight;
+      scrollToStart(loadingDiv);
 
       try {
         const response = await fetch('/api/query/', {
@@ -464,6 +605,7 @@
 
     function handleSend(e) {
       e.preventDefault();
+      chatInput.blur();
       sendQuestion(chatInput.value);
     }
 
@@ -471,97 +613,276 @@
       sendQuestion(q);
     }
 
-    // Voice Input Integration (Web Speech API)
-    const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
+    // -------------------------------------------------------------------
+    // Local Speech-to-Text with Automatic Voice Activity Detection (VAD)
+    // -------------------------------------------------------------------
+    let mediaRecorder = null;
+    let audioChunks = [];
+    let isRecording = false;
+    let audioStream = null;
+    let audioContext = null;
+    let analyserNode = null;
+    let vadIntervalId = null;
 
-    if (!SpeechRecognitionCtor) {
+    const SILENCE_DURATION_MS = 750; // 750ms continuous silence after speech for snappy auto-stop
+    const INITIAL_NO_SPEECH_TIMEOUT_MS = 6000; // 6s timeout if user never speaks
+    const MAX_RECORDING_DURATION_MS = 35000; // 35s max recording guardrail
+    const SPEECH_START_THRESHOLD = 14; // Frequency volume threshold to trigger speech start
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
       if (micBtn) {
         micBtn.disabled = true;
-        micBtn.title = "Voice input is not supported in this browser";
+        micBtn.title = "Audio recording is not supported in this browser";
       }
-    } else {
-      const recognition = new SpeechRecognitionCtor();
-      recognition.interimResults = true;
-      recognition.maxAlternatives = 1;
+    } else if (micBtn) {
+      micBtn.addEventListener('click', function () {
+        if (isRecording) {
+          // Manual emergency stop override
+          stopRecording();
+        } else {
+          startRecording();
+        }
+      });
+    }
 
-      let isListening = false;
-      let finalTranscript = "";
+    async function startRecording() {
+      try {
+        setVoiceStatus("");
+        audioChunks = [];
 
-      recognition.onstart = function () {
-        isListening = true;
-        finalTranscript = "";
-        micBtn.classList.add('listening');
-        setVoiceStatus("Listening...");
-      };
+        audioStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          }
+        });
 
-      recognition.onresult = function (event) {
-        let interim = "";
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const transcript = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            finalTranscript += transcript;
-          } else {
-            interim += transcript;
+        // Initialize Web Audio API Analyser for silence / volume detection
+        const AudioCtxCtor = window.AudioContext || window.webkitAudioContext;
+        audioContext = new AudioCtxCtor();
+        if (audioContext.state === 'suspended') {
+          await audioContext.resume();
+        }
+
+        const source = audioContext.createMediaStreamSource(audioStream);
+        analyserNode = audioContext.createAnalyser();
+        analyserNode.fftSize = 512;
+        analyserNode.smoothingTimeConstant = 0.2;
+        source.connect(analyserNode);
+
+        // Select optimal container MIME type
+        let options = {};
+        const mimeTypes = [
+          'audio/webm;codecs=opus',
+          'audio/webm',
+          'audio/ogg;codecs=opus',
+          'audio/mp4',
+          'audio/wav'
+        ];
+        for (const mt of mimeTypes) {
+          if (MediaRecorder.isTypeSupported(mt)) {
+            options = { mimeType: mt };
+            break;
           }
         }
-        chatInput.value = (finalTranscript + interim).trim();
-      };
 
-      recognition.onerror = function (event) {
-        let message = "Voice input error. Please try again or type your question.";
-        if (event.error === "not-allowed" || event.error === "service-not-allowed") {
-          message = "Microphone permission was denied.";
-        } else if (event.error === "no-speech") {
-          message = "No speech detected. Please try again.";
-        } else if (event.error === "network") {
-          message = "Network error during voice recognition.";
-        }
-        setVoiceStatus(message, true);
-      };
+        mediaRecorder = new MediaRecorder(audioStream, options);
 
-      recognition.onend = function () {
-        isListening = false;
-        micBtn.classList.remove('listening');
+        mediaRecorder.ondataavailable = function (event) {
+          if (event.data && event.data.size > 0) {
+            audioChunks.push(event.data);
+          }
+        };
 
-        const question = finalTranscript.trim();
-        finalTranscript = "";
+        mediaRecorder.onstart = function () {
+          isRecording = true;
+          micBtn.classList.add('listening');
+          setVoiceStatus("🔴 Listening...");
+          startVoiceActivityMonitoring();
+        };
 
-        if (!question) return;
+        mediaRecorder.onerror = function (event) {
+          console.error("MediaRecorder error:", event.error);
+          cleanupRecording();
+          setVoiceStatus("⚠️ Microphone recording error. Please try again.", true);
+        };
 
-        chatInput.value = question;
-        const lang = voiceLangSelect ? voiceLangSelect.value : 'en-IN';
+        mediaRecorder.onstop = async function () {
+          micBtn.classList.remove('listening');
+          isRecording = false;
+          stopVoiceActivityMonitoring();
 
-        if (lang === 'te-IN') {
-          setVoiceStatus("Translating...");
-          translateTeluguToEnglish(question)
-            .then(englishText => {
-              const finalQuery = englishText || question;
-              chatInput.value = finalQuery;
-              setVoiceStatus("");
-              sendQuestion(finalQuery);
-            })
-            .catch(() => {
-              setVoiceStatus("Translation unavailable, sending raw transcript.", true);
-              sendQuestion(question);
-            });
-        } else {
-          setVoiceStatus("");
-          sendQuestion(question);
-        }
-      };
-
-      if (micBtn) {
-        micBtn.addEventListener('click', function () {
-          if (isListening) {
-            recognition.stop();
+          if (audioChunks.length === 0) {
+            cleanupRecording();
+            setVoiceStatus("⚠️ No speech detected. Please try again.", true);
             return;
           }
-          setVoiceStatus("");
-          recognition.lang = voiceLangSelect ? voiceLangSelect.value : 'en-IN';
+
+          const actualMime = mediaRecorder.mimeType || 'audio/webm';
+          const audioBlob = new Blob(audioChunks, { type: actualMime });
+          cleanupRecording();
+
+          let ext = 'webm';
+          if (actualMime.includes('wav')) ext = 'wav';
+          else if (actualMime.includes('mp4')) ext = 'mp4';
+          else if (actualMime.includes('ogg')) ext = 'ogg';
+
+          setVoiceStatus("⏳ Transcribing audio locally...");
+
+          const formData = new FormData();
+          formData.append('audio', audioBlob, `recording.${ext}`);
+
           try {
-            recognition.start();
-          } catch (err) {}
+            const response = await fetch('/api/transcribe/', {
+              method: 'POST',
+              body: formData
+            });
+
+            const data = await response.json();
+
+            if (data.success && data.text) {
+              if (data.debug) {
+                setVoiceStatus(`Heard: "${data.raw_text}" → Interpreted: "${data.text}" (${data.duration}s)`);
+              } else {
+                setVoiceStatus("");
+              }
+              chatInput.value = data.text;
+              // Execute the existing query flow automatically
+              sendQuestion(data.text);
+            } else {
+              setVoiceStatus(data.error || "⚠️ Could not understand the audio. Please try again.", true);
+            }
+          } catch (err) {
+            console.error("Transcription endpoint error:", err);
+            setVoiceStatus("⚠️ Could not understand the audio. Please try again.", true);
+          }
+        };
+
+        mediaRecorder.start(100);
+      } catch (err) {
+        console.error("Microphone access error:", err);
+        cleanupRecording();
+        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+          setVoiceStatus("⚠️ Microphone permission was denied. Please allow microphone access.", true);
+        } else {
+          setVoiceStatus("⚠️ Microphone is unavailable or not detected.", true);
+        }
+      }
+    }
+
+    function startVoiceActivityMonitoring() {
+      if (!analyserNode) return;
+
+      const bufferLength = analyserNode.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+      const recordingStartTime = Date.now();
+      let hasSpeechStarted = false;
+      let lastSpeechTime = 0;
+
+      if (vadIntervalId) clearInterval(vadIntervalId);
+
+      vadIntervalId = setInterval(() => {
+        if (!isRecording || !analyserNode) {
+          stopVoiceActivityMonitoring();
+          return;
+        }
+
+        analyserNode.getByteFrequencyData(dataArray);
+
+        // Compute average frequency amplitude (voice volume)
+        let sum = 0;
+        for (let i = 0; i < bufferLength; i++) {
+          sum += dataArray[i];
+        }
+        const currentVolume = sum / bufferLength;
+        const now = Date.now();
+
+        if (currentVolume >= SPEECH_START_THRESHOLD) {
+          hasSpeechStarted = true;
+          lastSpeechTime = now;
+        }
+
+        if (hasSpeechStarted) {
+          const silenceDuration = now - lastSpeechTime;
+          if (silenceDuration >= SILENCE_DURATION_MS) {
+            // User stopped speaking and 1.4s of continuous silence elapsed -> auto stop
+            stopVoiceActivityMonitoring();
+            stopRecording();
+            return;
+          }
+        } else {
+          // Speech has not yet started
+          if (now - recordingStartTime >= INITIAL_NO_SPEECH_TIMEOUT_MS) {
+            // Initial timeout: user clicked mic but never spoke
+            stopVoiceActivityMonitoring();
+            abortRecordingNoSpeech();
+            return;
+          }
+        }
+
+        // Hard maximum recording length guardrail (35s)
+        if (now - recordingStartTime >= MAX_RECORDING_DURATION_MS) {
+          stopVoiceActivityMonitoring();
+          stopRecording();
+        }
+      }, 50);
+    }
+
+    function stopVoiceActivityMonitoring() {
+      if (vadIntervalId) {
+        clearInterval(vadIntervalId);
+        vadIntervalId = null;
+      }
+    }
+
+    function abortRecordingNoSpeech() {
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        audioChunks = [];
+        try {
+          mediaRecorder.ondataavailable = null;
+          mediaRecorder.onstop = null;
+          mediaRecorder.stop();
+        } catch (e) {}
+      }
+      cleanupRecording();
+      setVoiceStatus("⚠️ No speech detected. Please try again.", true);
+    }
+
+    function stopRecording() {
+      stopVoiceActivityMonitoring();
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        try {
+          mediaRecorder.stop();
+        } catch (e) {
+          console.warn("Error stopping recorder:", e);
+        }
+      }
+    }
+
+    function cleanupRecording() {
+      stopVoiceActivityMonitoring();
+
+      if (audioContext) {
+        try {
+          if (audioContext.state !== 'closed') {
+            audioContext.close();
+          }
+        } catch (e) {}
+        audioContext = null;
+      }
+      analyserNode = null;
+
+      if (audioStream) {
+        audioStream.getTracks().forEach(track => {
+          try { track.stop(); } catch (e) {}
         });
+        audioStream = null;
+      }
+
+      isRecording = false;
+      if (micBtn) {
+        micBtn.classList.remove('listening');
       }
     }
 
@@ -573,13 +894,6 @@
       } else {
         voiceStatus.classList.remove('error');
       }
-    }
-
-    async function translateTeluguToEnglish(text) {
-      const res = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=te|en`);
-      if (!res.ok) throw new Error("Translation failed");
-      const data = await res.json();
-      return data?.responseData?.translatedText || text;
     }
   </script>
 </body>

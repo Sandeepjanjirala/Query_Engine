@@ -4,6 +4,7 @@ from functools import lru_cache
 
 from django.conf import settings
 import pandas as pd
+import re
 
 from .analytics import (
     aggregate_by_group,
@@ -21,8 +22,24 @@ from .analytics import (
     revenue_salary_segment_comparison,
     revenue_salary_summary,
     revenue_salary_threshold_filter,
+    select_dropout_entities,
     top_5_dropout_branches,
     year_over_year_ranking,
+)
+from .analysis_engine import (
+    build_agm_analysis,
+    build_branch_analysis,
+    build_ri_analysis,
+    build_agm_fee_due_analysis,
+    build_ri_fee_due_analysis,
+    build_branch_fee_due_analysis,
+    build_agm_revenue_salary_analysis,
+    build_ri_revenue_salary_analysis,
+    build_branch_revenue_salary_analysis,
+    build_agm_teacher_student_ratio_analysis,
+    build_ri_teacher_student_ratio_analysis,
+    build_branch_teacher_student_ratio_analysis,
+    format_display_ri_name,
 )
 from .formatting import (
     format_branch_lookup,
@@ -47,8 +64,10 @@ from .formatting import (
     format_threshold_result,
     format_top_5_dropout,
     format_year_over_year,
+    render_operation_response,
 )
-from .glossary import GROUP_COLUMNS, ROOM_METRICS
+from .glossary import AGM_COLUMN, BRANCH_COLUMN, GROUP_COLUMNS, RI_COLUMN, ROOM_METRICS, ZONE_COLUMN
+from .params import resolve_single_entity
 from .metric_registry import get_default_metric_registry
 from .pandas_tools import build_metric_index, load_excel, resolve_column
 from .query_planner import get_prepared_dataframe
@@ -82,13 +101,14 @@ def _empty_result(function_name: str, answer: str):
 
 
 def run_top_5_dropout(params: dict | None = None, context: dict | None = None):
-    """V1 pre-function: top 5 branches with highest CY-DPP."""
+    """V1 pre-function: top 5 branches with highest CY-DPP (with 10% threshold & fallback)."""
     ctx = context if context is not None else (params if isinstance(params, dict) and 'question' not in params else None)
     df = get_prepared_dataframe(['CY-DPP'], ctx)
-    results = top_5_dropout_branches(df)
+    raw_results = rank_branches_by_metric(df, 'CY-DPP', n=None, ascending=False)
+    results, is_fallback = select_dropout_entities(raw_results, threshold=10.0, explicit_top_n=5)
     return {
         'function': 'top_5_dropout_branches',
-        'answer': format_top_5_dropout(results),
+        'answer': format_top_5_dropout(results, context=ctx, is_fallback=is_fallback),
         'data': results,
     }
 
@@ -116,10 +136,20 @@ def run_rank_branches_by_metric(params: dict, context: dict | None = None):
             'rank_branches_by_metric',
             f"No data column is available for the requested metric ({metric}).",
         )
-    results = rank_branches_by_metric(df, column, n=params.get('n', 5), ascending=params.get('ascending', False))
+
+    ascending = params.get('ascending', False)
+    is_dropout_pct = (spec and spec.metric_id == 'DPP') or metric in ('DPP', 'CY-DPP') or 'dpp' in str(column).lower()
+
+    if is_dropout_pct and not ascending:
+        raw_results = rank_branches_by_metric(df, column, n=None, ascending=False)
+        results, is_fallback = select_dropout_entities(raw_results, threshold=10.0, explicit_top_n=params.get('n'))
+    else:
+        results = rank_branches_by_metric(df, column, n=params.get('n'), ascending=ascending)
+        is_fallback = False
+
     return {
         'function': 'rank_branches_by_metric',
-        'answer': format_ranked_branches(results, metric, params.get('ascending', False)),
+        'answer': format_ranked_branches(results, metric, ascending, context=context, is_fallback=is_fallback),
         'data': results,
     }
 
@@ -155,6 +185,46 @@ def run_branch_metric_lookup(params: dict, context: dict | None = None):
     }
 
 
+def run_branch_hierarchy_lookup(params: dict, context: dict | None = None):
+    """Answers which RI, AGM, and Zone a branch belongs to."""
+    branches = params.get('branches') or (context.get('branches') if context else None) or []
+    df = get_dataframe()
+    if not branches or branches == ['All']:
+        return _empty_result('branch_hierarchy_lookup', 'No branch was specified.')
+
+    results = []
+    for b in branches:
+        match = df[df[BRANCH_COLUMN].astype(str).str.lower() == str(b).lower()]
+        if match.empty:
+            match = df[df[BRANCH_COLUMN].astype(str).str.lower().str.contains(str(b).lower(), na=False)]
+        if not match.empty:
+            row = match.iloc[0]
+            ri = row.get(RI_COLUMN, 'N/A')
+            agm = row.get(AGM_COLUMN, 'N/A')
+            zone = row.get(ZONE_COLUMN, 'N/A')
+            results.append({
+                'branch': str(row[BRANCH_COLUMN]),
+                'ri': str(ri),
+                'agm': str(agm),
+                'zone': str(zone),
+            })
+
+    if not results:
+        return _empty_result('branch_hierarchy_lookup', f"Branch '{branches[0]}' was not found.")
+
+    res = results[0]
+    answer = (
+        f"**{res['branch']}** belongs to **RI {res['ri']}** "
+        f"(AGM: **{res['agm']}**, Zone: **{res['zone']}**)."
+    )
+    return {
+        'function': 'branch_hierarchy_lookup',
+        'answer': answer,
+        'data': results,
+    }
+
+
+
 def run_group_metric_aggregate(params: dict, context: dict | None = None):
     """Sum/average/count of a metric grouped by Zone, AGM, or RI."""
     group_column = GROUP_COLUMNS.get(params['group_dimension'])
@@ -179,12 +249,36 @@ def run_group_metric_aggregate(params: dict, context: dict | None = None):
             f"No data column is available for the requested metric ({metric}).",
         )
     agg = params.get('agg', 'mean' if metric in ('DPP', 'STR', 'Avg-SPS') else 'sum')
-    results = aggregate_by_group(
-        df, group_column, metric_column, agg=agg, n=params.get('n'), ascending=params.get('ascending', False)
+    ascending = params.get('ascending', False)
+    is_dropout_pct = (spec and spec.metric_id == 'DPP') or metric in ('DPP', 'CY-DPP') or 'dpp' in str(metric_column).lower()
+
+    q_text = params.get('question', '').lower()
+    has_ranking_intent = (
+        params.get('n') is not None
+        or any(k in q_text for k in ('highest', 'lowest', 'worst', 'best', 'top', 'bottom', 'rank', 'ranking', 'which ris', 'which agms', 'which zones', 'which branches'))
     )
+    is_specific_single_entity = bool(context and (
+        (context.get('ri') and context['ri'] != 'All')
+        or (context.get('agm') and context['agm'] != 'All')
+        or (context.get('zone') and context['zone'] != 'All')
+    )) and not any(w in q_text for w in ('which ris', 'which agms', 'which zones', 'which branches'))
+
+    if is_dropout_pct and not ascending and (has_ranking_intent or not is_specific_single_entity):
+        raw_results = aggregate_by_group(
+            df, group_column, metric_column, agg=agg, n=None, ascending=False
+        )
+        results, is_fallback = select_dropout_entities(raw_results, threshold=10.0, explicit_top_n=params.get('n'))
+    else:
+        results = aggregate_by_group(
+            df, group_column, metric_column, agg=agg, n=params.get('n'), ascending=ascending
+        )
+        is_fallback = False
+
+    raw_year = params.get('raw_year')
+
     return {
         'function': 'group_metric_aggregate',
-        'answer': format_group_aggregate(results, metric, params['group_dimension'], agg),
+        'answer': format_group_aggregate(results, metric, params['group_dimension'], agg, context=context, is_fallback=is_fallback, year=raw_year),
         'data': results,
     }
 
@@ -963,16 +1057,511 @@ def run_revenue_salary_ratio(params: dict, context: dict | None = None):
     return run_revenue_salary_summary(params, context=context)
 
 
+def run_ri_dropout_statistics(params: dict, context: dict | None = None):
+    """
+    Executes a complete 8-section RI Dropout Statistics Review for the Main Report domain.
+    """
+    df = get_dataframe()
+    context = context or {}
+    ri_name = context.get('ri') or params.get('ri') or params.get('entity_name') or params.get('question', '')
+    if not ri_name or str(ri_name).lower() == 'all':
+        return run_entity_summary(params, context)
+
+    resolved_ri = resolve_single_entity(str(ri_name), df[RI_COLUMN].dropna().unique(), 'ri')
+    if not resolved_ri:
+        return {
+            'function': 'ri_dropout_statistics',
+            'answer': f"I couldn't find a matching RI for '{ri_name}'. Please check the RI name and try again.",
+            'data': [],
+        }
+
+    analysis = build_ri_analysis(df, ri_name=resolved_ri, context=context)
+    answer = render_operation_response(analysis)
+
+    return {
+        'function': 'ri_dropout_statistics',
+        'answer': answer,
+        'data': analysis.rows,
+        'analysis': analysis,
+    }
+
+
+def run_agm_dropout_statistics(params: dict, context: dict | None = None):
+    """
+    Executes a complete 11-section AGM Dropout Statistics Review for the Main Report domain.
+    """
+    df = get_dataframe()
+    context = context or {}
+    agm_name = context.get('agm') or params.get('agm') or params.get('entity_name') or params.get('question', '')
+    if not agm_name or str(agm_name).lower() == 'all':
+        return run_entity_summary(params, context)
+
+    resolved_agm = resolve_single_entity(str(agm_name), df[AGM_COLUMN].dropna().unique(), 'agm')
+    if not resolved_agm:
+        return {
+            'function': 'agm_dropout_statistics',
+            'answer': f"I couldn't find a matching AGM for '{agm_name}'. Please check the AGM name and try again.",
+            'data': [],
+        }
+
+    analysis = build_agm_analysis(df, agm_name=resolved_agm, context=context)
+    answer = render_operation_response(analysis)
+
+    return {
+        'function': 'agm_dropout_statistics',
+        'answer': answer,
+        'data': analysis.rows,
+        'analysis': analysis,
+    }
+
+
+def run_branch_dropout_statistics(params: dict, context: dict | None = None):
+    """
+    Executes a complete 10-section Branch Dropout Statistics Review for the Main Report domain.
+    """
+    df = get_dataframe()
+    context = context or {}
+    branch_name = (
+        context.get('branch')
+        or (context.get('branches')[0] if isinstance(context.get('branches'), list) and len(context.get('branches')) > 0 and str(context.get('branches')[0]).lower() != 'all' else None)
+        or params.get('branch')
+        or (params.get('branches')[0] if isinstance(params.get('branches'), list) and len(params.get('branches')) > 0 and str(params.get('branches')[0]).lower() != 'all' else None)
+        or params.get('entity_name')
+        or params.get('question', '')
+    )
+    if not branch_name or str(branch_name).lower() == 'all':
+        return run_entity_summary(params, context)
+
+    resolved_branch = resolve_single_entity(str(branch_name), df[BRANCH_COLUMN].dropna().unique(), 'branch')
+    if not resolved_branch:
+        raw_label = str(branch_name).strip()
+        return {
+            'function': 'branch_dropout_statistics',
+            'answer': f"I couldn't find a matching branch for '{raw_label}'. Please check the branch name and try again.",
+            'data': [],
+        }
+
+    analysis = build_branch_analysis(df, branch_name=resolved_branch, context=context)
+    answer = render_operation_response(analysis)
+
+    return {
+        'function': 'branch_dropout_statistics',
+        'answer': answer,
+        'data': analysis.rows,
+        'analysis': analysis,
+    }
+
+
+def run_zone_dropout_statistics(params: dict, context: dict | None = None):
+    """
+    Executes a complete Zone Dropout Statistics Review for the Main Report domain.
+    """
+    df = get_dataframe()
+    context = context or {}
+    zone_name = (
+        context.get('zone')
+        or params.get('zone')
+        or params.get('entity_name')
+        or params.get('question', '')
+    )
+    if not zone_name or str(zone_name).lower() == 'all':
+        return run_entity_summary(params, context)
+
+    resolved_zone = resolve_single_entity(str(zone_name), df[ZONE_COLUMN].dropna().unique(), 'zone')
+    if not resolved_zone:
+        raw_label = str(zone_name).strip()
+        return {
+            'function': 'zone_dropout_statistics',
+            'answer': f"I couldn't find a matching zone for '{raw_label}'. Please check the zone name and try again.",
+            'data': [],
+        }
+
+    merged_context = dict(context or {})
+    merged_context['zone'] = resolved_zone
+    res = run_entity_summary(params, merged_context)
+    res['function'] = 'zone_dropout_statistics'
+    return res
+
+
+ALL_DOMAIN_STATISTICS = ['dropout', 'fee_due', 'revenue_salary', 'teacher_student_ratio']
+
+
+def run_ri_statistics(params: dict, context: dict | None = None):
+    """
+    Executes an overall 4-domain Statistics Review for an RI (Dropout, Fee Due, Revenue vs Salary, STR).
+    """
+    context = context or {}
+    ri_name = context.get('ri') or params.get('ri') or params.get('entity_name') or params.get('question', '')
+    if not ri_name or str(ri_name).lower() == 'all':
+        return run_entity_summary(params, context)
+
+    df = get_dataframe()
+    candidate_ris = list(df[RI_COLUMN].dropna().unique()) if RI_COLUMN in df.columns else []
+    resolved_ri = resolve_single_entity(str(ri_name), candidate_ris, 'ri') if ri_name != 'All' else 'All'
+    if not resolved_ri:
+        resolved_ri = str(ri_name).strip()
+
+    return run_ri_combined_statistics(ri=resolved_ri, statistics=ALL_DOMAIN_STATISTICS, params=params, context=context)
+
+
+def run_agm_statistics(params: dict, context: dict | None = None):
+    """
+    Executes an overall 4-domain Statistics Review for an AGM (Dropout, Fee Due, Revenue vs Salary, STR).
+    """
+    context = context or {}
+    agm_name = context.get('agm') or params.get('agm') or params.get('entity_name') or params.get('question', '')
+    if not agm_name or str(agm_name).lower() == 'all':
+        return run_entity_summary(params, context)
+
+    df = get_dataframe()
+    candidate_agms = list(df[AGM_COLUMN].dropna().unique()) if AGM_COLUMN in df.columns else []
+    resolved_agm = resolve_single_entity(str(agm_name), candidate_agms, 'agm') if agm_name != 'All' else 'All'
+    if not resolved_agm:
+        resolved_agm = str(agm_name).strip()
+
+    return run_agm_combined_statistics(agm=resolved_agm, statistics=ALL_DOMAIN_STATISTICS, params=params, context=context)
+
+
+def run_branch_statistics(params: dict, context: dict | None = None):
+    """
+    Executes an overall 4-domain Statistics Review for a Branch (Dropout, Fee Due, Revenue vs Salary, STR).
+    """
+    context = context or {}
+    branch_name = (
+        context.get('branch')
+        or (context.get('branches')[0] if isinstance(context.get('branches'), list) and len(context.get('branches')) > 0 and str(context.get('branches')[0]).lower() != 'all' else None)
+        or params.get('branch')
+        or (params.get('branches')[0] if isinstance(params.get('branches'), list) and len(params.get('branches')) > 0 and str(params.get('branches')[0]).lower() != 'all' else None)
+        or params.get('entity_name')
+        or params.get('question', '')
+    )
+    if not branch_name or str(branch_name).lower() == 'all':
+        return run_entity_summary(params, context)
+
+    df = get_dataframe()
+    candidate_branches = list(df[BRANCH_COLUMN].dropna().unique()) if BRANCH_COLUMN in df.columns else []
+    resolved_branch = resolve_single_entity(str(branch_name), candidate_branches, 'branch') if branch_name != 'All' else 'All'
+    if not resolved_branch:
+        resolved_branch = str(branch_name).strip()
+
+    return run_branch_combined_statistics(branch=resolved_branch, statistics=ALL_DOMAIN_STATISTICS, params=params, context=context)
+
+
+run_zone_statistics = run_zone_dropout_statistics
+run_ri_analysis = run_ri_statistics
+
+
+def run_agm_fee_due_statistics(params: dict, context: dict | None = None):
+    """
+    Executes a complete Fee Due Statistics Review for an AGM.
+    """
+    context = context or {}
+    agm_name = context.get('agm') or params.get('agm') or params.get('entity_name')
+    if not agm_name:
+        q = params.get('question', '')
+        m = re.search(r'agm\s+([^fee|due|stat|rep|rev|ana]+)', q, flags=re.IGNORECASE)
+        if m:
+            agm_name = m.group(1).strip()
+    if not agm_name or str(agm_name).lower() == 'all':
+        agm_name = 'All'
+
+    df = get_prepared_dataframe(['CY_A_FD'], primary_dataset_id='fee_analysis')
+    candidate_agms = list(df['AGM Name'].dropna().unique()) if 'AGM Name' in df.columns else (list(df['AGM'].dropna().unique()) if 'AGM' in df.columns else [])
+    resolved_agm = resolve_single_entity(str(agm_name), candidate_agms, 'agm') if agm_name != 'All' else None
+    if not resolved_agm:
+        resolved_agm = format_display_ri_name(str(agm_name)) if agm_name != 'All' else (candidate_agms[0] if candidate_agms else 'All')
+
+    analysis = build_agm_fee_due_analysis(df, agm_name=resolved_agm, context=context)
+    answer = render_operation_response(analysis)
+
+    return {
+        'function': 'agm_fee_due_statistics',
+        'answer': answer,
+        'data': analysis.rows,
+        'analysis': analysis,
+    }
+
+
+def run_ri_fee_due_statistics(params: dict, context: dict | None = None):
+    """
+    Executes a complete Fee Due Statistics Review for an RI.
+    """
+    context = context or {}
+    ri_name = context.get('ri') or params.get('ri') or params.get('entity_name')
+    if not ri_name:
+        q = params.get('question', '')
+        m = re.search(r'ri\s+([^fee|due|stat|rep|rev|ana]+)', q, flags=re.IGNORECASE)
+        if m:
+            ri_name = m.group(1).strip()
+    if not ri_name or str(ri_name).lower() == 'all':
+        ri_name = 'All'
+
+    df = get_prepared_dataframe(['CY_A_FD'], primary_dataset_id='fee_analysis')
+    candidate_ris = list(df['RI Name'].dropna().unique()) if 'RI Name' in df.columns else (list(df['RI'].dropna().unique()) if 'RI' in df.columns else [])
+    resolved_ri = resolve_single_entity(str(ri_name), candidate_ris, 'ri') if ri_name != 'All' else None
+    if not resolved_ri:
+        resolved_ri = format_display_ri_name(str(ri_name)) if ri_name != 'All' else (candidate_ris[0] if candidate_ris else 'All')
+
+    analysis = build_ri_fee_due_analysis(df, ri_name=resolved_ri, context=context)
+    answer = render_operation_response(analysis)
+
+    return {
+        'function': 'ri_fee_due_statistics',
+        'answer': answer,
+        'data': analysis.rows,
+        'analysis': analysis,
+    }
+
+
+def run_branch_fee_due_statistics(params: dict, context: dict | None = None):
+    """
+    Executes a complete Fee Due Statistics Review for a single Branch.
+    """
+    context = context or {}
+    branch_name = (
+        context.get('branch')
+        or (context.get('branches')[0] if isinstance(context.get('branches'), list) and len(context.get('branches')) > 0 and str(context.get('branches')[0]).lower() != 'all' else None)
+        or params.get('branch')
+        or (params.get('branches')[0] if isinstance(params.get('branches'), list) and len(params.get('branches')) > 0 and str(params.get('branches')[0]).lower() != 'all' else None)
+        or params.get('entity_name')
+    )
+    if not branch_name:
+        q = params.get('question', '')
+        m = re.search(r'(?:branch\s+)?([A-Za-z0-9\s]+?)\s+(?:fee|due|stat|rep|rev|ana)', q, flags=re.IGNORECASE)
+        if m:
+            branch_name = m.group(1).strip()
+    if not branch_name or str(branch_name).lower() == 'all':
+        branch_name = 'All'
+
+    df = get_prepared_dataframe(['CY_A_FD'], primary_dataset_id='fee_analysis')
+    candidate_branches = list(df['Branch'].dropna().unique()) if 'Branch' in df.columns else []
+    resolved_branch = resolve_single_entity(str(branch_name), candidate_branches, 'branch') if branch_name != 'All' else None
+    if not resolved_branch:
+        resolved_branch = str(branch_name).strip() if branch_name != 'All' else (candidate_branches[0] if candidate_branches else 'All')
+
+    analysis = build_branch_fee_due_analysis(df, branch_name=resolved_branch, context=context)
+    answer = render_operation_response(analysis)
+
+    return {
+        'function': 'branch_fee_due_statistics',
+        'answer': answer,
+        'data': analysis.rows,
+        'analysis': analysis,
+    }
+
+
+def run_agm_revenue_salary_statistics(params: dict, context: dict | None = None):
+    """
+    Executes a complete Revenue vs Salary Statistics Review for an AGM.
+    """
+    context = context or {}
+    agm_name = context.get('agm') or params.get('agm') or params.get('entity_name')
+    if not agm_name:
+        q = params.get('question', '')
+        m = re.search(r'agm\s+([^fee|due|stat|rep|rev|sal|ana]+)', q, flags=re.IGNORECASE)
+        if m:
+            agm_name = m.group(1).strip()
+    if not agm_name or str(agm_name).lower() == 'all':
+        agm_name = 'All'
+
+    df = get_prepared_dataframe(['TOT_REV_N'], primary_dataset_id='revenue_vs_salary')
+    candidate_agms = list(df['AGM Name'].dropna().unique()) if 'AGM Name' in df.columns else (list(df['AGM'].dropna().unique()) if 'AGM' in df.columns else [])
+    resolved_agm = resolve_single_entity(str(agm_name), candidate_agms, 'agm') if agm_name != 'All' else None
+    if not resolved_agm:
+        resolved_agm = format_display_ri_name(str(agm_name)) if agm_name != 'All' else (candidate_agms[0] if candidate_agms else 'All')
+
+    analysis = build_agm_revenue_salary_analysis(df, agm_name=resolved_agm, context=context)
+    answer = render_operation_response(analysis)
+
+    return {
+        'function': 'agm_revenue_salary_statistics',
+        'answer': answer,
+        'data': analysis.rows,
+        'analysis': analysis,
+    }
+
+
+def run_ri_revenue_salary_statistics(params: dict, context: dict | None = None):
+    """
+    Executes a complete Revenue vs Salary Statistics Review for an RI.
+    """
+    context = context or {}
+    ri_name = context.get('ri') or params.get('ri') or params.get('entity_name')
+    if not ri_name:
+        q = params.get('question', '')
+        m = re.search(r'ri\s+([^fee|due|stat|rep|rev|sal|ana]+)', q, flags=re.IGNORECASE)
+        if m:
+            ri_name = m.group(1).strip()
+    if not ri_name or str(ri_name).lower() == 'all':
+        ri_name = 'All'
+
+    df = get_prepared_dataframe(['TOT_REV_N'], primary_dataset_id='revenue_vs_salary')
+    candidate_ris = list(df['RI Name'].dropna().unique()) if 'RI Name' in df.columns else (list(df['RI'].dropna().unique()) if 'RI' in df.columns else [])
+    resolved_ri = resolve_single_entity(str(ri_name), candidate_ris, 'ri') if ri_name != 'All' else None
+    if not resolved_ri:
+        resolved_ri = format_display_ri_name(str(ri_name)) if ri_name != 'All' else (candidate_ris[0] if candidate_ris else 'All')
+
+    analysis = build_ri_revenue_salary_analysis(df, ri_name=resolved_ri, context=context)
+    answer = render_operation_response(analysis)
+
+    return {
+        'function': 'ri_revenue_salary_statistics',
+        'answer': answer,
+        'data': analysis.rows,
+        'analysis': analysis,
+    }
+
+
+def run_branch_revenue_salary_statistics(params: dict, context: dict | None = None):
+    """
+    Executes a complete Revenue vs Salary Statistics Review for a single Branch.
+    """
+    context = context or {}
+    branch_name = (
+        context.get('branch')
+        or (context.get('branches')[0] if isinstance(context.get('branches'), list) and len(context.get('branches')) > 0 and str(context.get('branches')[0]).lower() != 'all' else None)
+        or params.get('branch')
+        or (params.get('branches')[0] if isinstance(params.get('branches'), list) and len(params.get('branches')) > 0 and str(params.get('branches')[0]).lower() != 'all' else None)
+        or params.get('entity_name')
+    )
+    if not branch_name:
+        q = params.get('question', '')
+        m = re.search(r'(?:branch\s+)?([A-Za-z0-9\s]+?)\s+(?:fee|due|stat|rep|rev|sal|ana)', q, flags=re.IGNORECASE)
+        if m:
+            branch_name = m.group(1).strip()
+    if not branch_name or str(branch_name).lower() == 'all':
+        branch_name = 'All'
+
+    df = get_prepared_dataframe(['TOT_REV_N'], primary_dataset_id='revenue_vs_salary')
+    candidate_branches = list(df['Branch'].dropna().unique()) if 'Branch' in df.columns else []
+    resolved_branch = resolve_single_entity(str(branch_name), candidate_branches, 'branch') if branch_name != 'All' else None
+    if not resolved_branch:
+        resolved_branch = str(branch_name).strip() if branch_name != 'All' else (candidate_branches[0] if candidate_branches else 'All')
+
+    analysis = build_branch_revenue_salary_analysis(df, branch_name=resolved_branch, context=context)
+    answer = render_operation_response(analysis)
+
+    return {
+        'function': 'branch_revenue_salary_statistics',
+        'answer': answer,
+        'data': analysis.rows,
+        'analysis': analysis,
+    }
+
+
+def run_agm_teacher_student_ratio_statistics(params: dict, context: dict | None = None):
+    """
+    Executes a complete Teacher Student Ratio Statistics Review for an AGM.
+    """
+    context = context or {}
+    agm_name = context.get('agm') or params.get('agm') or params.get('entity_name')
+    if not agm_name:
+        q = params.get('question', '')
+        m = re.search(r'agm\s+([^teacher|student|staff|ratio|stat|rep|rev|ana]+)', q, flags=re.IGNORECASE)
+        if m:
+            agm_name = m.group(1).strip()
+    if not agm_name or str(agm_name).lower() == 'all':
+        agm_name = 'All'
+
+    df = get_prepared_dataframe(['CY-STR'])
+    candidate_agms = list(df['AGM Name'].dropna().unique()) if 'AGM Name' in df.columns else (list(df['AGM'].dropna().unique()) if 'AGM' in df.columns else [])
+    resolved_agm = resolve_single_entity(str(agm_name), candidate_agms, 'agm') if agm_name != 'All' else None
+    if not resolved_agm:
+        resolved_agm = format_display_ri_name(str(agm_name)) if agm_name != 'All' else (candidate_agms[0] if candidate_agms else 'All')
+
+    analysis = build_agm_teacher_student_ratio_analysis(df, agm_name=resolved_agm, context=context)
+    answer = render_operation_response(analysis)
+
+    return {
+        'function': 'agm_teacher_student_ratio_statistics',
+        'answer': answer,
+        'data': analysis.rows,
+        'analysis': analysis,
+    }
+
+
+def run_ri_teacher_student_ratio_statistics(params: dict, context: dict | None = None):
+    """
+    Executes a complete Teacher Student Ratio Statistics Review for an RI.
+    """
+    context = context or {}
+    ri_name = context.get('ri') or params.get('ri') or params.get('entity_name')
+    if not ri_name:
+        q = params.get('question', '')
+        m = re.search(r'ri\s+([^teacher|student|staff|ratio|stat|rep|rev|ana]+)', q, flags=re.IGNORECASE)
+        if m:
+            ri_name = m.group(1).strip()
+    if not ri_name or str(ri_name).lower() == 'all':
+        ri_name = 'All'
+
+    df = get_prepared_dataframe(['CY-STR'])
+    candidate_ris = list(df['RI Name'].dropna().unique()) if 'RI Name' in df.columns else (list(df['RI'].dropna().unique()) if 'RI' in df.columns else [])
+    resolved_ri = resolve_single_entity(str(ri_name), candidate_ris, 'ri') if ri_name != 'All' else None
+    if not resolved_ri:
+        resolved_ri = format_display_ri_name(str(ri_name)) if ri_name != 'All' else (candidate_ris[0] if candidate_ris else 'All')
+
+    analysis = build_ri_teacher_student_ratio_analysis(df, ri_name=resolved_ri, context=context)
+    answer = render_operation_response(analysis)
+
+    return {
+        'function': 'ri_teacher_student_ratio_statistics',
+        'answer': answer,
+        'data': analysis.rows,
+        'analysis': analysis,
+    }
+
+
+def run_branch_teacher_student_ratio_statistics(params: dict, context: dict | None = None):
+    """
+    Executes a complete Teacher Student Ratio Statistics Review for a single Branch.
+    """
+    context = context or {}
+    branch_name = (
+        context.get('branch')
+        or (context.get('branches')[0] if isinstance(context.get('branches'), list) and len(context.get('branches')) > 0 and str(context.get('branches')[0]).lower() != 'all' else None)
+        or params.get('branch')
+        or (params.get('branches')[0] if isinstance(params.get('branches'), list) and len(params.get('branches')) > 0 and str(params.get('branches')[0]).lower() != 'all' else None)
+        or params.get('entity_name')
+    )
+    if not branch_name:
+        q = params.get('question', '')
+        m = re.search(r'(?:branch\s+)?([A-Za-z0-9\s]+?)\s+(?:teacher|student|staff|ratio|stat|rep|rev|ana)', q, flags=re.IGNORECASE)
+        if m:
+            branch_name = m.group(1).strip()
+    if not branch_name or str(branch_name).lower() == 'all':
+        branch_name = 'All'
+
+    df = get_prepared_dataframe(['CY-STR'])
+    candidate_branches = list(df['Branch'].dropna().unique()) if 'Branch' in df.columns else []
+    resolved_branch = resolve_single_entity(str(branch_name), candidate_branches, 'branch') if branch_name != 'All' else None
+    if not resolved_branch:
+        resolved_branch = str(branch_name).strip() if branch_name != 'All' else (candidate_branches[0] if candidate_branches else 'All')
+
+    analysis = build_branch_teacher_student_ratio_analysis(df, branch_name=resolved_branch, context=context)
+    answer = render_operation_response(analysis)
+
+    return {
+        'function': 'branch_teacher_student_ratio_statistics',
+        'answer': answer,
+        'data': analysis.rows,
+        'analysis': analysis,
+    }
+
+
 def run_entity_summary(params: dict, context: dict | None = None):
     """
     Handles multi-metric organizational entity summary report card requests.
     """
     df = get_dataframe()
     context = context or {}
-    df = apply_filter_context(df, context)
 
     def _is_specific(val):
         return bool(val) and str(val).strip().casefold() != 'all'
+
+    if _is_specific(context.get('ri')):
+        return run_ri_analysis(params, context)
+
+    df = apply_filter_context(df, context)
 
     group_dim = params.get('group_dimension') or (
         'Zone' if _is_specific(context.get('zone')) else (
@@ -1005,5 +1594,158 @@ def run_entity_summary(params: dict, context: dict | None = None):
         'answer': answer,
         'data': res.get('records', []),
     }
+
+
+def run_agm_combined_statistics(agm: str | None = None, statistics: list[str] | None = None, params: dict | None = None, context: dict | None = None):
+    params = params or {}
+    context = context or {}
+    agm_name = agm or context.get('agm') or params.get('agm') or params.get('entity_name') or 'All'
+    stats = statistics or params.get('statistics') or []
+
+    results = {}
+    if 'dropout' in stats:
+        results['dropout'] = run_agm_dropout_statistics({'agm': agm_name, 'entity_name': agm_name}, context=context)
+    if 'fee_due' in stats:
+        results['fee_due'] = run_agm_fee_due_statistics({'agm': agm_name, 'entity_name': agm_name}, context=context)
+    if 'revenue_salary' in stats:
+        results['revenue_salary'] = run_agm_revenue_salary_statistics({'agm': agm_name, 'entity_name': agm_name}, context=context)
+    if 'teacher_student_ratio' in stats:
+        results['teacher_student_ratio'] = run_agm_teacher_student_ratio_statistics({'agm': agm_name, 'entity_name': agm_name}, context=context)
+
+    from .multi_stats import format_combined_statistics
+    answer = format_combined_statistics('AGM', str(agm_name), stats, results)
+    return {
+        'success': True,
+        'intent': 'statistics',
+        'hierarchy': 'AGM',
+        'entity': str(agm_name),
+        'requested_statistics': stats,
+        'function': 'agm_combined_statistics',
+        'answer': answer,
+        'data': {
+            'entity_type': 'AGM',
+            'entity_name': str(agm_name),
+            'requested_statistics': stats,
+            'results': {k: v.get('data', []) for k, v in results.items()}
+        }
+    }
+
+
+def run_ri_combined_statistics(ri: str | None = None, statistics: list[str] | None = None, params: dict | None = None, context: dict | None = None):
+    params = params or {}
+    context = context or {}
+    ri_name = ri or context.get('ri') or params.get('ri') or params.get('entity_name') or 'All'
+    stats = statistics or params.get('statistics') or []
+
+    results = {}
+    if 'dropout' in stats:
+        results['dropout'] = run_ri_dropout_statistics({'ri': ri_name, 'entity_name': ri_name}, context=context)
+    if 'fee_due' in stats:
+        results['fee_due'] = run_ri_fee_due_statistics({'ri': ri_name, 'entity_name': ri_name}, context=context)
+    if 'revenue_salary' in stats:
+        results['revenue_salary'] = run_ri_revenue_salary_statistics({'ri': ri_name, 'entity_name': ri_name}, context=context)
+    if 'teacher_student_ratio' in stats:
+        results['teacher_student_ratio'] = run_ri_teacher_student_ratio_statistics({'ri': ri_name, 'entity_name': ri_name}, context=context)
+
+    from .multi_stats import format_combined_statistics
+    answer = format_combined_statistics('RI', str(ri_name), stats, results)
+    return {
+        'success': True,
+        'intent': 'statistics',
+        'hierarchy': 'RI',
+        'entity': str(ri_name),
+        'requested_statistics': stats,
+        'function': 'ri_combined_statistics',
+        'answer': answer,
+        'data': {
+            'entity_type': 'RI',
+            'entity_name': str(ri_name),
+            'requested_statistics': stats,
+            'results': {k: v.get('data', []) for k, v in results.items()}
+        }
+    }
+
+
+def run_branch_combined_statistics(branch: str | None = None, statistics: list[str] | None = None, params: dict | None = None, context: dict | None = None):
+    params = params or {}
+    context = context or {}
+    branch_name = (
+        branch
+        or context.get('branch')
+        or (context.get('branches')[0] if isinstance(context.get('branches'), list) and len(context.get('branches')) > 0 and str(context.get('branches')[0]).lower() != 'all' else None)
+        or params.get('branch')
+        or (params.get('branches')[0] if isinstance(params.get('branches'), list) and len(params.get('branches')) > 0 and str(params.get('branches')[0]).lower() != 'all' else None)
+        or params.get('entity_name')
+        or 'All'
+    )
+    stats = statistics or params.get('statistics') or []
+
+    results = {}
+    if 'dropout' in stats:
+        results['dropout'] = run_branch_dropout_statistics({'branch': branch_name, 'entity_name': branch_name}, context=context)
+    if 'fee_due' in stats:
+        results['fee_due'] = run_branch_fee_due_statistics({'branch': branch_name, 'entity_name': branch_name}, context=context)
+    if 'revenue_salary' in stats:
+        results['revenue_salary'] = run_branch_revenue_salary_statistics({'branch': branch_name, 'entity_name': branch_name}, context=context)
+    if 'teacher_student_ratio' in stats:
+        results['teacher_student_ratio'] = run_branch_teacher_student_ratio_statistics({'branch': branch_name, 'entity_name': branch_name}, context=context)
+
+    from .multi_stats import format_combined_statistics
+    answer = format_combined_statistics('Branch', str(branch_name), stats, results)
+    return {
+        'success': True,
+        'intent': 'statistics',
+        'hierarchy': 'Branch',
+        'entity': str(branch_name),
+        'requested_statistics': stats,
+        'function': 'branch_combined_statistics',
+        'answer': answer,
+        'data': {
+            'entity_type': 'Branch',
+            'entity_name': str(branch_name),
+            'requested_statistics': stats,
+            'results': {k: v.get('data', []) for k, v in results.items()}
+        }
+    }
+
+
+def run_multi_statistics(
+    hierarchy: str,
+    entity: str,
+    requested_statistics: list[str] | None = None,
+    params: dict | None = None,
+    context: dict | None = None,
+):
+    """
+    Generic multi-statistics orchestrator across all hierarchy levels (RI, AGM, Branch).
+    Executes only the requested domain functions and combines structured results.
+    """
+    params = params or {}
+    context = context or {}
+    stats = requested_statistics or params.get('statistics') or ALL_DOMAIN_STATISTICS
+
+    h_upper = str(hierarchy).strip().upper()
+    if h_upper == 'RI':
+        return run_ri_combined_statistics(ri=entity, statistics=stats, params=params, context=context)
+    elif h_upper == 'BRANCH':
+        return run_branch_combined_statistics(branch=entity, statistics=stats, params=params, context=context)
+    else:
+        return run_agm_combined_statistics(agm=entity, statistics=stats, params=params, context=context)
+
+
+def run_combined_statistics(params: dict | None = None, context: dict | None = None):
+    """
+    Common coordinator function for multi-statistics requests.
+    """
+    params = params or {}
+    context = context or {}
+    question = params.get('question', '')
+
+    from .multi_stats import extract_requested_statistics, detect_entity_level_and_name
+    stats = params.get('statistics') or extract_requested_statistics(question)
+    entity_type, entity_name = detect_entity_level_and_name(question, context)
+
+    return run_multi_statistics(entity_type, entity_name, stats, params=params, context=context)
+
 
 

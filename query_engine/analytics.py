@@ -119,6 +119,15 @@ def aggregate_by_group(
     from .metric_registry import get_default_metric_registry
     registry = get_default_metric_registry()
     spec = registry.get(value_column)
+    if not spec:
+        for candidate in [
+            re.sub(r'^(?:CY|LY)[-_]', '', value_column),
+            re.sub(r'^[A-Z]{2,3}[-_](?:[A-Z][-_])?(?:CY|LY)[-_]', '', value_column),
+            value_column.split('-')[-1],
+        ]:
+            spec = registry.get(candidate)
+            if spec:
+                break
 
     cy_col, ly_col = _resolve_cy_ly_cols(df, value_column)
 
@@ -190,9 +199,10 @@ def aggregate_by_group(
     if ly_col and ly_col in work.columns:
         work[ly_col] = pd.to_numeric(work[ly_col], errors='coerce')
     work = work.dropna(subset=[group_column])
+    grouped = work.groupby(group_column)
 
-    grouped = work.groupby(group_column, dropna=False)
-    if agg == 'mean' or (spec and spec.data_type == 'percentage'):
+    is_pct = (spec and spec.data_type == 'percentage') or 'DPP' in val_col or 'percentage' in str(val_col).lower() or 'ratio' in str(val_col).lower()
+    if agg == 'mean' or is_pct:
         cy_series = grouped[val_col].mean()
         ly_series = grouped[ly_col].mean() if (ly_col and ly_col in work.columns) else pd.Series(0.0, index=cy_series.index)
     elif agg == 'count':
@@ -218,6 +228,62 @@ def aggregate_by_group(
             'value': c_val,
         })
     return results
+
+
+def select_dropout_entities(
+    entities: list[dict],
+    threshold: float = 10.0,
+    explicit_top_n: int | None = None,
+) -> tuple[list[dict], bool]:
+    """
+    Applies the 10% threshold + historical comparison + fallback selection rules for dropout percentage:
+    
+    1. RULE 1 (Current Year above threshold):
+       Include entities whose Current Year dropout percentage is strictly > threshold (default 10.0).
+       
+    2. RULE 2 (Historical comparison):
+       Preserve historical comparison (Current Year > threshold and Last Year > threshold).
+       Historical data and differences are preserved without duplicate records.
+       
+    3. RULE 3 (Fallback):
+       If the requested scope has NO qualifying entities above threshold, return ALL entities within
+       that requested scope so the user never receives an empty result.
+       
+    4. Explicit Top-N:
+       If explicit_top_n is specified (e.g. 5, 10), apply Top-N AFTER threshold filtering / fallback.
+       
+    Returns:
+        (selected_entities, is_fallback)
+    """
+    if not entities:
+        return [], False
+
+    # Rule 1 & Rule 2: Strictly > threshold
+    qualifying = [
+        item for item in entities
+        if item.get('current_year') is not None and float(item['current_year']) > threshold
+    ]
+
+    if qualifying:
+        selected = [dict(item) for item in qualifying]
+        is_fallback = False
+    else:
+        # Rule 3: Fallback to all entities in the requested scope
+        selected = [dict(item) for item in entities]
+        is_fallback = True
+
+    # Ensure sorted by current_year descending
+    selected.sort(key=lambda x: float(x.get('current_year') or x.get('value') or 0.0), reverse=True)
+
+    # Apply explicit Top-N if requested
+    if explicit_top_n is not None and explicit_top_n > 0:
+        selected = selected[:explicit_top_n]
+
+    # Re-index ranks 1..N
+    for rank, item in enumerate(selected, start=1):
+        item['rank'] = rank
+
+    return selected, is_fallback
 
 
 def year_over_year_ranking(
@@ -777,6 +843,7 @@ SEGMENT_LABELS = {
     'PP': 'Pre Primary',
     'LPS': 'Lower Primary',
     'UPS': 'Upper Primary',
+    'PS': 'Primary School',
     'HS': 'High School',
     'ACD': 'ACD',
     'AD_AC': 'Activity & Admin',
@@ -806,16 +873,33 @@ def revenue_salary_summary(df: pd.DataFrame, segment: str = 'TOT') -> dict:
             'surplus': 0.0,
         }
 
-    pfx = f"{segment}_" if segment in ('PP', 'LPS', 'UPS', 'HS', 'ACD', 'AD_AC', 'TOT') else 'TOT_'
-    rev_col = f"{pfx}REV_N" if f"{pfx}REV_N" in df.columns else 'TOT_REV_N'
-    sal_col = f"{pfx}SAL" if f"{pfx}SAL" in df.columns else 'TOT_SAL'
-    ns_col = f"{pfx}NS" if f"{pfx}NS" in df.columns else 'TOT_NS'
-    sc_col = f"{pfx}SC" if f"{pfx}SC" in df.columns else 'TOT_SC'
+    if segment == 'PS':
+        lps_rev = float(pd.to_numeric(df['LPS_REV_N'], errors='coerce').fillna(0).sum()) if 'LPS_REV_N' in df.columns else 0.0
+        ups_rev = float(pd.to_numeric(df['UPS_REV_N'], errors='coerce').fillna(0).sum()) if 'UPS_REV_N' in df.columns else 0.0
+        tot_rev = lps_rev + ups_rev
 
-    tot_rev = float(pd.to_numeric(df[rev_col], errors='coerce').fillna(0).sum())
-    tot_sal = float(pd.to_numeric(df[sal_col], errors='coerce').fillna(0).sum())
-    tot_ns = float(pd.to_numeric(df[ns_col], errors='coerce').fillna(0).sum())
-    tot_sc = float(pd.to_numeric(df[sc_col], errors='coerce').fillna(0).sum())
+        lps_sal = float(pd.to_numeric(df['LPS_SAL'], errors='coerce').fillna(0).sum()) if 'LPS_SAL' in df.columns else 0.0
+        ups_sal = float(pd.to_numeric(df['UPS_SAL'], errors='coerce').fillna(0).sum()) if 'UPS_SAL' in df.columns else 0.0
+        tot_sal = lps_sal + ups_sal
+
+        lps_ns = float(pd.to_numeric(df['LPS_NS'], errors='coerce').fillna(0).sum()) if 'LPS_NS' in df.columns else 0.0
+        ups_ns = float(pd.to_numeric(df['UPS_NS'], errors='coerce').fillna(0).sum()) if 'UPS_NS' in df.columns else 0.0
+        tot_ns = lps_ns + ups_ns
+
+        lps_sc = float(pd.to_numeric(df['LPS_SC'], errors='coerce').fillna(0).sum()) if 'LPS_SC' in df.columns else 0.0
+        ups_sc = float(pd.to_numeric(df['UPS_SC'], errors='coerce').fillna(0).sum()) if 'UPS_SC' in df.columns else 0.0
+        tot_sc = lps_sc + ups_sc
+    else:
+        pfx = f"{segment}_" if segment in ('PP', 'LPS', 'UPS', 'HS', 'ACD', 'AD_AC', 'TOT') else 'TOT_'
+        rev_col = f"{pfx}REV_N" if f"{pfx}REV_N" in df.columns else 'TOT_REV_N'
+        sal_col = f"{pfx}SAL" if f"{pfx}SAL" in df.columns else 'TOT_SAL'
+        ns_col = f"{pfx}NS" if f"{pfx}NS" in df.columns else 'TOT_NS'
+        sc_col = f"{pfx}SC" if f"{pfx}SC" in df.columns else 'TOT_SC'
+
+        tot_rev = float(pd.to_numeric(df[rev_col], errors='coerce').fillna(0).sum())
+        tot_sal = float(pd.to_numeric(df[sal_col], errors='coerce').fillna(0).sum())
+        tot_ns = float(pd.to_numeric(df[ns_col], errors='coerce').fillna(0).sum())
+        tot_sc = float(pd.to_numeric(df[sc_col], errors='coerce').fillna(0).sum())
 
     fa = (tot_rev / tot_ns) if tot_ns > 0 else 0.0
     cs = (tot_sal / tot_ns) if tot_ns > 0 else 0.0
@@ -841,10 +925,10 @@ def revenue_salary_summary(df: pd.DataFrame, segment: str = 'TOT') -> dict:
 
 def revenue_salary_segment_comparison(df: pd.DataFrame) -> list[dict]:
     """
-    Compares all 6 academic segments (PP, LPS, UPS, HS, ACD, AD_AC)
+    Compares academic segments (PP, PS, HS, ACD, AD_AC)
     by summing raw columns first and computing derived metrics.
     """
-    segments = ['PP', 'LPS', 'UPS', 'HS', 'ACD', 'AD_AC']
+    segments = ['PP', 'PS', 'HS', 'ACD', 'AD_AC']
     results = []
     for seg in segments:
         summary = revenue_salary_summary(df, segment=seg)

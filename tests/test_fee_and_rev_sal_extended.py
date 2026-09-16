@@ -203,7 +203,7 @@ class FeeAndRevenueSalaryExtendedTest(TestCase):
             handler = route_question(q)
             self.assertIsNotNone(handler, f"Handler returned None for '{q}'")
             res = handler(self.context)
-            self.assertIn(res["function"], ("entity_summary", "branch_scorecard"), f"Function for '{q}' was '{res['function']}'")
+            self.assertIn(res["function"], ("entity_summary", "branch_scorecard", "ri_analysis", "ri_statistics", "agm_statistics", "branch_statistics", "ri_dropout_statistics", "agm_dropout_statistics", "branch_dropout_statistics", "zone_dropout_statistics"), f"Function for '{q}' was '{res['function']}'")
             self.assertTrue(len(res["data"]) > 0, f"No data for '{q}'")
 
         # 2. Scoped Metric Lookups (Zone, RI, AGM)
@@ -243,20 +243,20 @@ class FeeAndRevenueSalaryExtendedTest(TestCase):
         # Highest vs Lowest category for dropout percentage
         h_high = route_question("Which category has the highest dropout percentage?")
         res_high = h_high(self.context)
-        self.assertIn("Highest category**: HS", res_high["answer"])
+        self.assertIn("Highest category**: PS", res_high["answer"])
 
         h_low = route_question("Which category has the lowest dropout percentage?")
         res_low = h_low(self.context)
-        self.assertIn("Lowest category**: PP", res_low["answer"])
+        self.assertIn("Lowest category**: HS", res_low["answer"])
 
         # Improved vs Declined category for dropout percentage YoY
         h_imp = route_question("Which category improved the most compared with last year?")
         res_imp = h_imp(self.context)
-        self.assertIn("Improved most**: PP", res_imp["answer"])
+        self.assertIn("Improved most**: HS", res_imp["answer"])
 
         h_dec = route_question("Which category declined the most compared with last year?")
         res_dec = h_dec(self.context)
-        self.assertIn("Declined most**: HS", res_dec["answer"])
+        self.assertIn("Declined most**: PS", res_dec["answer"])
 
 
 

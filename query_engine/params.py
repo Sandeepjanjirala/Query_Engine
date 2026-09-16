@@ -9,6 +9,7 @@ comparisons, room ratios, or named entities.
 """
 from __future__ import annotations
 
+import difflib
 import re
 
 from .glossary import LEVEL_TOKENS, STAFF_CATEGORY_TOKENS
@@ -46,7 +47,7 @@ _METRIC_KEYWORDS: list[tuple[tuple[str, ...], str]] = [
     (('dropout count', 'number of dropouts', 'total dropouts', 'total dropout', 'dropped out', 'dropouts', 'dropout', 'drop out', 'dp',
       'doupouts', 'droupout', 'drupouts', 'dopout', 'dopouts'), 'DP'),
     (('grant strength', 'gs'), 'GS'),
-    (('student teacher ratio', 'student-teacher ratio', 'teacher ratio', 'str', 'performance gap', 'staff-to-student performance gap', 'tot_str'), 'STR'),
+    (('teacher student ratio', 'teacher-student ratio', 'student teacher ratio', 'student-teacher ratio', 'teacher ratio', 'str', 'performance gap', 'staff-to-student performance gap', 'tot_str'), 'STR'),
     (('staff count', 'staff strength', 'no of staff', 'number of staff', 'total staff', 'staff', 'sc', 'tot_sc'), 'SC'),
     (('average strength per section', 'strength per section', 'students per section', 'student per section', 'sps', 'avg-sps', 'avg sps'), 'Avg-SPS'),
     (('number of sections', 'section count', 'sections', 'nos'), 'NOS'),
@@ -182,9 +183,19 @@ def extract_type(question: str) -> str | None:
 def extract_year(question: str) -> str | None:
     """CY / LY, or None if unspecified."""
     q = question.lower()
-    if any(p in q for p in ('previous-year', 'previous year', 'last year', 'was the', 'ly')):
+    has_cy = (
+        any(p in q for p in ('current-year', 'current year', 'this year', 'present year'))
+        or bool(re.search(r'\b(?:cy|cy-dpp|cy_dpp)\b', q))
+    )
+    has_ly = (
+        any(p in q for p in ('previous-year', 'previous year', 'last year', 'past year', 'prior year', 'was the'))
+        or bool(re.search(r'\b(?:ly|ly-dpp|ly_dpp)\b', q))
+    )
+    if has_cy and not has_ly:
+        return 'CY'
+    if has_ly and not has_cy:
         return 'LY'
-    if any(p in q for p in ('current-year', 'current year', 'current', 'this year', 'cy')):
+    if has_cy and has_ly:
         return 'CY'
     return None
 
@@ -201,6 +212,26 @@ def extract_n(question: str, default: int = 5) -> int:
         if re.search(rf'\b(?:top|bottom|which)\s+{word}\b', q):
             return value
     return default
+
+
+def extract_explicit_n(question: str) -> int | None:
+    """
+    Extracts an explicit rank limit N from the question (e.g. 'top 5', 'which 5', 'top 10', 'highest 3').
+    Returns None if no explicit number was requested, indicating an unbounded query.
+    """
+    q = question.lower()
+    match = re.search(r'\b(?:top|bottom|which|highest|lowest|best|worst)\s+(\d+)\b', q)
+    if match:
+        return int(match.group(1))
+    match_branches = re.search(r'\b(\d+)\s+(?:branches|ris|agms|zones)\b', q)
+    if match_branches:
+        return int(match_branches.group(1))
+    for word, value in NUMBER_WORDS.items():
+        if re.search(rf'\b(?:top|bottom|which|highest|lowest|best|worst)\s+{word}\b', q):
+            return value
+        if re.search(rf'\b{word}\s+(?:branches|ris|agms|zones)\b', q):
+            return value
+    return None
 
 
 def extract_direction(question: str, default: str = 'desc') -> str:
@@ -222,7 +253,10 @@ def is_yoy_question(question: str) -> bool:
         return any(phrase in q for phrase in _YOY_EXPLICIT_PHRASES)
     if any(_word(w).search(q) for w in _YOY_CHANGE_WORDS):
         return True
-    if 'compare' in q and any(y in q for y in ('year', 'cy', 'ly', 'annual', 'current-year', 'previous-year', '2024-25', '2025-26', 'last year')):
+    if 'compare' in q and (
+        any(y in q for y in ('year', 'annual', 'current-year', 'previous-year', '2024-25', '2025-26', 'last year'))
+        or bool(re.search(r'\b(?:cy|ly)\b', q))
+    ):
         return True
     return False
 
@@ -316,6 +350,13 @@ def extract_group_dimension(question: str) -> str | None:
     q = question.lower()
     has_branch_dim = 'branch' in q or 'branches' in q
 
+    if any(k in q for k in ('which ris', 'which ri')):
+        return 'ri'
+    if any(k in q for k in ('which agms', 'which agm')):
+        return 'agm'
+    if any(k in q for k in ('which zones', 'which zone')):
+        return 'zone'
+
     if any(k in q for k in ('branch type', 's_type', 'admission type', 'student type', 's type', 'by type', 'by branch type')):
         return 's_type'
 
@@ -371,50 +412,158 @@ def extract_aggregation(question: str, default: str = 'sum') -> str:
     return default
 
 
-def _normalize_entity_string(s: str) -> str:
-    """Strip titles, dots, punctuation, single-letter initials, and normalize whitespace."""
-    s = str(s).lower()
+def normalize_entity_name(s: str) -> str:
+    """Normalize text for entity matching: lowercase, strip honorifics, strip punctuation, collapse spaces, convert word numbers to digits."""
+    if not s:
+        return ""
+    s = str(s).lower().strip()
     s = re.sub(r'^(mr\.|mr\s+|mrs\.|mrs\s+|dr\.|dr\s+)', '', s)
-    s = s.replace('.', ' ').replace('-', ' ')
-    tokens = [t for t in s.split() if len(t) > 1 and t not in ('mr', 'mrs', 'ms', 'dr')]
-    return ' '.join(tokens).strip()
+    s = re.sub(r'[._\-,]+', ' ', s)
+    s = re.sub(r'\s+', ' ', s).strip()
+    words = s.split()
+    converted = [str(NUMBER_WORDS[w]) if w in NUMBER_WORDS else w for w in words]
+    return ' '.join(converted)
 
 
-def extract_known_values(question: str, values) -> list[str]:
-    """Extract known entity names matching case-insensitively with word boundaries and title/dot flexibility."""
-    q = question.lower()
-    q_norm = _normalize_entity_string(question)
-    found = []
-    seen = set()
+_normalize_entity_string = normalize_entity_name
 
-    for value in sorted({str(v) for v in values if v and str(v).strip()}, key=len, reverse=True):
-        raw_val = value.strip()
-        needle = raw_val.lower()
-        if not needle or needle in seen:
+
+def resolve_single_entity(query_text: str, candidate_entities, entity_type: str = 'branch') -> str | None:
+    """
+    Resolves the intended entity from `query_text` against `candidate_entities`.
+    Returns the exact canonical string from `candidate_entities` if matched, else None.
+    
+    Priority Matching:
+    1. Exact normalized phrase match in query (longest match wins).
+    2. High-confidence fuzzy match (>= 80%).
+    3. Moderate-confidence fuzzy match (70-79%) if single clear winner.
+    """
+    candidates = [str(c).strip() for c in candidate_entities if c and str(c).strip()]
+    if not candidates:
+        return None
+
+    norm_q = normalize_entity_name(query_text)
+    if not norm_q:
+        return None
+    
+    query_digits = set(re.findall(r'\b\d+\b', norm_q))
+
+    # -------------------------------------------------------------
+    # Step A: Exact / Word-Boundary Phrase Match (Longest Wins)
+    # -------------------------------------------------------------
+    exact_matches = []
+    for raw_cand in candidates:
+        norm_cand = normalize_entity_name(raw_cand)
+        if not norm_cand:
+            continue
+        
+        cand_digits = set(re.findall(r'\b\d+\b', norm_cand))
+        if cand_digits and not cand_digits.issubset(query_digits):
             continue
 
-        # 1. Exact case-insensitive match (with re.escape)
-        if re.search(rf'\b{re.escape(needle)}\b', q):
-            found.append(raw_val)
-            seen.add(needle)
-            continue
+        pattern = r'\b' + re.escape(norm_cand) + r'\b'
+        if re.search(pattern, norm_q):
+            exact_matches.append((raw_cand, norm_cand, len(norm_cand)))
 
-        # 2. Match without title (e.g. "M.Ramana" for "Mr.M.Ramana")
-        no_title = re.sub(r'^(mr\.|mr\s+|mrs\.|mrs\s+|dr\.|dr\s+)', '', needle, flags=re.IGNORECASE).strip()
-        if no_title and len(no_title) >= 3 and re.search(rf'\b{re.escape(no_title)}\b', q):
-            found.append(raw_val)
-            seen.add(needle)
-            continue
+    if exact_matches:
+        exact_matches.sort(key=lambda x: x[2], reverse=True)
+        return exact_matches[0][0]
 
-        # 3. Match normalized versions (no dots/extra spaces)
-        val_norm = _normalize_entity_string(raw_val)
-        if val_norm and len(val_norm) >= 3:
-            if re.search(rf'\b{re.escape(val_norm)}\b', q_norm):
-                found.append(raw_val)
-                seen.add(needle)
+    # For person names (RI / AGM), check strategy for token-set match or main-name token match
+    if entity_type in ('ri', 'agm'):
+        person_matches = []
+        for raw_cand in candidates:
+            norm_cand = normalize_entity_name(raw_cand)
+            cand_digits = set(re.findall(r'\b\d+\b', norm_cand))
+            if cand_digits and not cand_digits.issubset(query_digits):
                 continue
+            tokens = [t for t in norm_cand.split() if len(t) > 1]
+            if tokens:
+                if all(re.search(r'\b' + re.escape(t) + r'\b', norm_q) for t in tokens):
+                    person_matches.append((raw_cand, 100, len(norm_cand)))
+                elif any(len(t) >= 3 and re.search(r'\b' + re.escape(t) + r'\b', norm_q) for t in tokens):
+                    person_matches.append((raw_cand, 80, len(norm_cand)))
+        if person_matches:
+            person_matches.sort(key=lambda x: (x[1], x[2]), reverse=True)
+            return person_matches[0][0]
 
-    return found
+    # For branch names, check if distinctive branch token matches in question (e.g. 'Miyapur' -> 'MIYAPUR FUTURE PATHWAYS')
+    if entity_type == 'branch':
+        branch_matches = []
+        for raw_cand in candidates:
+            norm_cand = normalize_entity_name(raw_cand)
+            cand_digits = set(re.findall(r'\b\d+\b', norm_cand))
+            if cand_digits and not cand_digits.issubset(query_digits):
+                continue
+            tokens = [t for t in norm_cand.split() if len(t) >= 4]
+            if tokens:
+                if any(re.search(r'\b' + re.escape(t) + r'\b', norm_q) for t in tokens[:2]):
+                    branch_matches.append((raw_cand, 90, len(norm_cand)))
+        if branch_matches:
+            branch_matches.sort(key=lambda x: (x[1], x[2]), reverse=True)
+            return branch_matches[0][0]
+
+    # -------------------------------------------------------------
+    # Step B & C: Fuzzy Matching
+    # -------------------------------------------------------------
+    stopwords = {
+        'statistics', 'statistic', 'stats', 'show', 'give', 'of', 'branch', 'branches',
+        'ri', 'ris', 'agm', 'agms', 'zone', 'zones', 'the', 'analyze', 'analysis',
+        'review', 'performance', 'summary', 'scorecard', 'report', 'details', 'for',
+        'in', 'at', 'please', 'me', 'what', 'is', 'are', 'highest', 'lowest', 'top',
+        'which', 'does', 'belong', 'to', 'how', 'many', 'much', 'percentage', 'count',
+        'dropout', 'dropouts', 'drop', 'fee', 'due', 'dues', 'revenue', 'salary', 'str'
+    }
+    q_words = [w for w in norm_q.split() if w not in stopwords]
+    clean_q = ' '.join(q_words).strip()
+    
+    if not clean_q:
+        return None
+
+    scores = []
+    for raw_cand in candidates:
+        norm_cand = normalize_entity_name(raw_cand)
+        if not norm_cand:
+            continue
+        
+        cand_digits = set(re.findall(r'\b\d+\b', norm_cand))
+        if cand_digits and not cand_digits.issubset(query_digits):
+            continue
+
+        ratio = difflib.SequenceMatcher(None, clean_q, norm_cand).ratio()
+        
+        cand_tokens = norm_cand.split()
+        if len(q_words) == 1:
+            w = q_words[0]
+            for ct in cand_tokens:
+                token_ratio = difflib.SequenceMatcher(None, w, ct).ratio()
+                if token_ratio > ratio:
+                    ratio = token_ratio
+        
+        scores.append((raw_cand, ratio))
+
+    scores.sort(key=lambda x: x[1], reverse=True)
+
+    if not scores:
+        return None
+
+    best_cand, best_score = scores[0]
+    second_score = scores[1][1] if len(scores) > 1 else 0.0
+
+    if best_score >= 0.80:
+        return best_cand
+
+    if 0.70 <= best_score < 0.80:
+        if (best_score - second_score) >= 0.10:
+            return best_cand
+
+    return None
+
+
+def extract_known_values(question: str, values, entity_type: str = 'branch') -> list[str]:
+    """Extract known entity names using exact normalized matching and tiered fuzzy matching."""
+    res = resolve_single_entity(question, values, entity_type=entity_type)
+    return [res] if res else []
 
 
 def has_any(question: str, phrases) -> bool:

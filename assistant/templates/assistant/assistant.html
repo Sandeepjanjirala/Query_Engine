@@ -3,6 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <title>AI Analytics Assistant</title>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    body { font-family: sans-serif; margin: 20px; line-height: 1.5; }
+    table { border-collapse: collapse; width: 100%; max-width: 800px; margin: 15px 0; }
+    th, td { border: 1px solid #cbd5e1; padding: 8px 12px; text-align: left; }
+    th { background: #f1f5f9; font-weight: 600; }
+  </style>
 </head>
 <body>
 <h1>AI Analytics Assistant</h1>
@@ -21,7 +28,10 @@
 {% endif %}
 {% if answer %}
   <h3>Answer</h3>
-  <div>{{ answer|safe }}</div>
+  <div id="answer-box"></div>
+  <script>
+    document.getElementById('answer-box').innerHTML = marked.parse({{ answer|json_script:"answer-raw" }}.textContent);
+  </script>
 {% endif %}
 </body>
 </html>

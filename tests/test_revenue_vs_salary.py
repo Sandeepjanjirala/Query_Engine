@@ -64,9 +64,9 @@ class RevenueVsSalaryAnalyticsTest(TestCase):
 
     def test_07_segment_breakdown_and_comparison(self):
         results = revenue_salary_segment_comparison(self.df)
-        self.assertEqual(len(results), 6)  # PP, LPS, UPS, HS, ACD, AD_AC
+        self.assertEqual(len(results), 5)  # PP, PS, HS, ACD, AD_AC
         segments = [r['segment'] for r in results]
-        self.assertEqual(segments, ['PP', 'LPS', 'UPS', 'HS', 'ACD', 'AD_AC'])
+        self.assertEqual(segments, ['PP', 'PS', 'HS', 'ACD', 'AD_AC'])
 
     def test_08_branch_ranking_by_revenue(self):
         ranked = revenue_salary_ranking(self.df, metric='TOT_REV_N', group_col='Branch', n=5, ascending=False)
@@ -185,11 +185,10 @@ class RevenueVsSalaryAPITest(DjangoTestCase):
         self.assertNotIn("total_revenue", res['data'])  # Only projected metric returned!
 
     def test_22_intent_based_projection_segment_comparison(self):
-        handler = route_question("Compare Lower Primary and Upper Primary revenue")
+        handler = route_question("Compare revenue across all academic segments")
         res = handler(context={})
-        self.assertIn("Lower Primary vs Upper Primary Revenue", res['answer'])
-        self.assertEqual(len(res['data']), 2)
-        self.assertEqual(res['data'][0]['segment'], 'LPS')
-        self.assertEqual(res['data'][1]['segment'], 'UPS')
+        self.assertIn("Revenue Comparison across Academic Segments", res['answer'])
+        self.assertEqual(len(res['data']), 5)
+        self.assertEqual(res['data'][1]['segment'], 'PS')
         self.assertIn("total_revenue", res['data'][0])
 

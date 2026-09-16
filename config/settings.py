@@ -41,3 +41,14 @@ REST_FRAMEWORK = {
 
 BRANCH_ANALYTICS_FILE = BASE_DIR / 'data' / 'branch_analytics.xlsx'
 BRANCH_ANALYTICS_SHEET = 'Sheet1'
+
+# Local Speech-to-Text (faster-whisper) Configuration
+import os
+WHISPER_MODEL = os.environ.get('WHISPER_MODEL', 'small')
+WHISPER_DEVICE = os.environ.get('WHISPER_DEVICE', 'auto')
+WHISPER_COMPUTE_TYPE = os.environ.get('WHISPER_COMPUTE_TYPE', 'auto')
+WHISPER_DOWNLOAD_ROOT = os.environ.get('WHISPER_DOWNLOAD_ROOT', None)
+WHISPER_CPU_THREADS = int(os.environ.get('WHISPER_CPU_THREADS', 4))
+WHISPER_BEAM_SIZE = int(os.environ.get('WHISPER_BEAM_SIZE', 1))
+VOICE_DEBUG_MODE = os.environ.get('VOICE_DEBUG_MODE', 'True').lower() in ('true', '1', 'yes')
+
