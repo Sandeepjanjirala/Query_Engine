@@ -18,8 +18,27 @@ def _is_all(value) -> bool:
     return value is None or str(value).strip() == '' or str(value).strip().casefold() == 'all'
 
 
+import re
+
+
+def _clean_str(val: str) -> str:
+    if not val:
+        return ""
+    s = str(val).lower().strip()
+    s = re.sub(r'^(mr\.|mr\s+|mrs\.|mrs\s+|dr\.|dr\s+)', '', s)
+    s = re.sub(r'[._\-,]+', ' ', s)
+    return re.sub(r'\s+', ' ', s).strip()
+
+
 def _match_column(df: pd.DataFrame, column: str, value: str) -> pd.DataFrame:
-    return df[df[column].astype('string').str.strip().str.casefold() == str(value).strip().casefold()]
+    col_series = df[column].astype('string').str.strip().str.casefold()
+    target = str(value).strip().casefold()
+    mask = col_series == target
+    if not mask.any():
+        clean_col = df[column].dropna().astype(str).map(_clean_str)
+        clean_target = _clean_str(value)
+        mask = clean_col == clean_target
+    return df[mask]
 
 
 def apply_filter_context(df: pd.DataFrame, context: dict | None) -> pd.DataFrame:

@@ -133,22 +133,39 @@ class WhisperTranscriber:
         try:
             initial_prompt = build_initial_prompt()
             t0 = time.time()
-            segments, info = self._model.transcribe(
-                target_path,
+            transcribe_kwargs = dict(
                 language=language,
                 initial_prompt=initial_prompt,
                 beam_size=self.beam_size,
                 temperature=0.0,
                 condition_on_previous_text=False,
+                repetition_penalty=1.2,
+                no_repeat_ngram_size=3,
+            )
+
+            # Pass 1: Try with Silero VAD (with relaxed threshold and generous speech padding)
+            segments, info = self._model.transcribe(
+                target_path,
                 vad_filter=True,
-                vad_parameters=dict(min_silence_duration_ms=400),
+                vad_parameters=dict(threshold=0.2, min_silence_duration_ms=600, speech_pad_ms=400),
+                **transcribe_kwargs,
             )
 
             # Assemble full transcript from segments
-            raw_parts = []
-            for segment in segments:
-                raw_parts.append(segment.text.strip())
+            raw_parts = [segment.text.strip() for segment in segments]
             raw_transcript = " ".join(raw_parts).strip()
+
+            # Pass 2 Fallback: If VAD dropped speech as silence, immediately retry without VAD
+            if not raw_transcript:
+                logger.info("Silero VAD produced empty transcript; falling back to non-VAD transcription.")
+                segments, info = self._model.transcribe(
+                    target_path,
+                    vad_filter=False,
+                    **transcribe_kwargs,
+                )
+                raw_parts = [segment.text.strip() for segment in segments]
+                raw_transcript = " ".join(raw_parts).strip()
+
             transcription_time = time.time() - t0
 
             logger.info(

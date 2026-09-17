@@ -234,14 +234,22 @@ def run_group_metric_aggregate(params: dict, context: dict | None = None):
     df = get_prepared_dataframe([m_key], context)
 
     metric_column = None
-    if spec and spec.source_column in df.columns:
-        metric_column = spec.source_column
-    elif metric in df.columns:
-        metric_column = metric
-    else:
+    level = params.get('level')
+    type_ = params.get('type')
+    year = params.get('year', 'CY')
+    if level or type_ or (year and year != 'CY'):
         metric_column = resolve_column(
-            build_metric_index(df), metric, params.get('level'), params.get('type'), params.get('year', 'CY')
+            build_metric_index(df), metric, level, type_, year
         )
+    if not metric_column:
+        if spec and spec.source_column in df.columns:
+            metric_column = spec.source_column
+        elif metric in df.columns:
+            metric_column = metric
+        else:
+            metric_column = resolve_column(
+                build_metric_index(df), metric, level, type_, year
+            )
 
     if group_column is None or metric_column is None:
         return _empty_result(
@@ -290,10 +298,22 @@ def run_year_over_year_change_ranking(params: dict, context: dict | None = None)
     type_ = params.get('type')
     n = params.get('n', 5)
     direction = params.get('direction', 'positive')
-    sort_by = params.get('sort_by', 'absolute' if direction == 'absolute' else 'change')
-    ascending = params.get('ascending', direction == 'negative')
 
     spec = get_default_metric_registry().get(metric)
+    kpi_dir = spec.kpi_direction if spec else ('negative' if 'dpp' in metric.lower() or 'dropout' in metric.lower() else 'positive')
+    q_text = params.get('question', '').lower()
+    is_improvement = any(w in q_text for w in ('improved', 'improvement', 'improving', 'improves', 'better'))
+
+    if is_improvement and kpi_dir == 'negative':
+        direction = 'negative'
+        ascending = True
+    elif is_improvement and kpi_dir == 'positive':
+        direction = 'positive'
+        ascending = False
+    else:
+        ascending = params.get('ascending', direction == 'negative')
+
+    sort_by = params.get('sort_by', 'absolute' if direction == 'absolute' else 'change')
     m_key = spec.metric_id if spec else metric
     df = get_prepared_dataframe([m_key], context)
 
@@ -306,11 +326,11 @@ def run_year_over_year_change_ranking(params: dict, context: dict | None = None)
             f"No current-year/last-year data is available for the requested metric ({metric}).",
         )
     results = year_over_year_ranking(
-        df, cy_column, ly_column, n=n, ascending=ascending, sort_by=sort_by
+        df, cy_column, ly_column, n=n, ascending=ascending, sort_by=sort_by, direction=direction
     )
     return {
         'function': 'year_over_year_change_ranking',
-        'answer': format_year_over_year(results, metric),
+        'answer': format_year_over_year(results, metric, context=context, ascending=ascending, direction=direction),
         'data': results,
     }
 
@@ -477,6 +497,13 @@ def run_calculate_room_ratio(params: dict, context: dict | None = None):
 def run_scope_total(params: dict, context: dict | None = None):
     """Calculate overall metric value across current filter scope."""
     metric = params.get('metric') or 'NOOR'
+    level = params.get('level')
+    type_ = params.get('type')
+    year = params.get('year', 'CY')
+
+    prefix_parts = [p for p in (level, type_) if p]
+    prefix = f"{'-'.join(prefix_parts)}-" if prefix_parts else ""
+
     spec = get_default_metric_registry().get(metric)
     m_key = spec.metric_id if spec else metric
     df = get_prepared_dataframe([m_key], context)
@@ -485,10 +512,23 @@ def run_scope_total(params: dict, context: dict | None = None):
     if spec and spec.metric_type == 'derived' and spec.numerator_metric and spec.denominator_metric:
         num_col = spec.numerator_metric
         den_col = spec.denominator_metric
-        if num_col not in df.columns:
-            num_col = f"CY-{num_col}" if f"CY-{num_col}" in df.columns else f"CY_{num_col}"
-        if den_col not in df.columns:
-            den_col = f"CY-{den_col}" if f"CY-{den_col}" in df.columns else f"CY_{den_col}"
+
+        if prefix:
+            candidate_num = f"{prefix}{year}-{num_col}"
+            candidate_den = f"{prefix}{year}-{den_col}"
+            if candidate_num in df.columns and candidate_den in df.columns:
+                num_col = candidate_num
+                den_col = candidate_den
+            else:
+                if num_col not in df.columns:
+                    num_col = f"{year}-{num_col}" if f"{year}-{num_col}" in df.columns else f"{year}_{num_col}"
+                if den_col not in df.columns:
+                    den_col = f"{year}-{den_col}" if f"{year}-{den_col}" in df.columns else f"{year}_{den_col}"
+        else:
+            if num_col not in df.columns:
+                num_col = f"{year}-{num_col}" if f"{year}-{num_col}" in df.columns else f"{year}_{num_col}"
+            if den_col not in df.columns:
+                den_col = f"{year}-{den_col}" if f"{year}-{den_col}" in df.columns else f"{year}_{den_col}"
 
         if num_col in df.columns and den_col in df.columns:
             n_sum = pd.to_numeric(df[num_col], errors='coerce').sum()
@@ -497,12 +537,14 @@ def run_scope_total(params: dict, context: dict | None = None):
                 val = (n_sum / d_sum) * (100.0 if spec.data_type == 'percentage' else 1.0)
 
     if val is None:
-        column = spec.source_column if spec and spec.source_column in df.columns else (resolve_column(build_metric_index(df), metric) or metric)
+        column = resolve_column(build_metric_index(df), metric, level, type_, year)
+        if not column:
+            column = spec.source_column if spec and spec.source_column in df.columns else metric
         if column not in df.columns:
-            if f"CY-{column}" in df.columns:
-                column = f"CY-{column}"
-            elif f"CY_{column}" in df.columns:
-                column = f"CY_{column}"
+            if f"{year}-{column}" in df.columns:
+                column = f"{year}-{column}"
+            elif f"{year}_{column}" in df.columns:
+                column = f"{year}_{column}"
         if column not in df.columns:
             return _empty_result('scope_total', f'Column not found for {metric}.')
         agg = 'mean' if (spec and spec.data_type == 'percentage') else 'sum'
@@ -511,8 +553,8 @@ def run_scope_total(params: dict, context: dict | None = None):
     val = round(float(val), 2)
     return {
         'function': 'scope_total',
-        'answer': format_scope_total(val, metric),
-        'data': [{'metric': metric, 'value': val}],
+        'answer': format_scope_total(val, metric, level=level, type_=type_),
+        'data': [{'metric': metric, 'value': val, 'level': level, 'type': type_}],
     }
 
 
@@ -676,6 +718,147 @@ def _project_fee_data(results: list[dict], target_metric: str | None, group_dim:
     return projected
 
 
+def run_total_fee_due(params: dict, context: dict | None = None):
+    """
+    Computes total active or historical fee due balance across current scope.
+    """
+    fee_metrics = ['CY_A_FD', 'LY_FD']
+    df = get_prepared_dataframe(fee_metrics, context)
+    target_metric = params.get('metric') or ('LY_FD' if params.get('year') == 'LY' else 'CY_A_FD')
+    if target_metric not in ('CY_A_FD', 'LY_FD'):
+        target_metric = 'CY_A_FD'
+    col_values = pd.to_numeric(df[target_metric], errors='coerce').fillna(0) if target_metric in df.columns else pd.Series([0])
+    total_val = float(col_values.sum())
+    spec = get_default_metric_registry().get(target_metric)
+    label = spec.display_name if spec else target_metric
+    formatted_val = f"\u20b9{int(round(total_val)):,}"
+
+    scope_desc = ""
+    if context:
+        if context.get('agm') and str(context['agm']).lower() != 'all':
+            scope_desc = f" under AGM {context['agm']}"
+        elif context.get('ri') and str(context['ri']).lower() != 'all':
+            scope_desc = f" under RI {context['ri']}"
+        elif context.get('zone') and str(context['zone']).lower() != 'all':
+            scope_desc = f" in {context['zone']} Zone"
+        elif context.get('branches') and context['branches'] != ['All'] and len(context['branches']) == 1:
+            scope_desc = f" for {context['branches'][0]}"
+
+    answer = f"Total {label}{scope_desc}: {formatted_val}"
+    return {
+        'function': 'fee_summary',
+        'capability': 'fee_total',
+        'metric': target_metric,
+        'answer': answer,
+        'data': [{target_metric: round(total_val, 2)}],
+    }
+
+
+def run_fee_due_student_count(params: dict, context: dict | None = None):
+    """
+    Computes total student count with fee due across current scope.
+    """
+    fee_metrics = ['CY_A_FDC', 'LY_FDC']
+    df = get_prepared_dataframe(fee_metrics, context)
+    target_metric = params.get('metric') or ('LY_FDC' if params.get('year') == 'LY' else 'CY_A_FDC')
+    if target_metric not in ('CY_A_FDC', 'LY_FDC'):
+        target_metric = 'CY_A_FDC'
+    col_values = pd.to_numeric(df[target_metric], errors='coerce').fillna(0) if target_metric in df.columns else pd.Series([0])
+    total_count = int(col_values.sum())
+    spec = get_default_metric_registry().get(target_metric)
+    label = spec.display_name if spec else target_metric
+
+    scope_desc = ""
+    if context:
+        if context.get('agm') and str(context['agm']).lower() != 'all':
+            scope_desc = f" under AGM {context['agm']}"
+        elif context.get('ri') and str(context['ri']).lower() != 'all':
+            scope_desc = f" under RI {context['ri']}"
+        elif context.get('zone') and str(context['zone']).lower() != 'all':
+            scope_desc = f" in {context['zone']} Zone"
+        elif context.get('branches') and context['branches'] != ['All'] and len(context['branches']) == 1:
+            scope_desc = f" for {context['branches'][0]}"
+
+    answer = f"Total {label}{scope_desc}: {total_count:,}"
+    return {
+        'function': 'fee_summary',
+        'capability': 'fee_due_count',
+        'metric': target_metric,
+        'answer': answer,
+        'data': [{target_metric: total_count}],
+    }
+
+
+def run_zero_paid_count(params: dict, context: dict | None = None):
+    """
+    Computes total student count who have paid zero fees.
+    """
+    fee_metrics = ['CY_ZP', 'CY_A_ZP']
+    df = get_prepared_dataframe(fee_metrics, context)
+    target_metric = 'CY_ZP'
+    col_values = pd.to_numeric(df[target_metric], errors='coerce').fillna(0) if target_metric in df.columns else pd.Series([0])
+    total_count = int(col_values.sum())
+
+    scope_desc = ""
+    if context:
+        if context.get('agm') and str(context['agm']).lower() != 'all':
+            scope_desc = f" under AGM {context['agm']}"
+        elif context.get('ri') and str(context['ri']).lower() != 'all':
+            scope_desc = f" under RI {context['ri']}"
+        elif context.get('zone') and str(context['zone']).lower() != 'all':
+            scope_desc = f" in {context['zone']} Zone"
+        elif context.get('branches') and context['branches'] != ['All'] and len(context['branches']) == 1:
+            scope_desc = f" for {context['branches'][0]}"
+
+    answer = f"Total Zero-Paid Students{scope_desc}: {total_count:,}"
+    return {
+        'function': 'fee_summary',
+        'capability': 'zero_paid_count',
+        'metric': target_metric,
+        'answer': answer,
+        'data': [{target_metric: total_count}],
+    }
+
+
+def run_zero_paid_fee_due(params: dict, context: dict | None = None):
+    """
+    Computes total zero-paid fee due balance across current scope.
+    """
+    fee_metrics = ['CY_ZP_FD']
+    df = get_prepared_dataframe(fee_metrics, context)
+    target_metric = 'CY_ZP_FD'
+    col_values = pd.to_numeric(df[target_metric], errors='coerce').fillna(0) if target_metric in df.columns else pd.Series([0])
+    total_val = float(col_values.sum())
+    formatted_val = f"\u20b9{int(round(total_val)):,}"
+
+    scope_desc = ""
+    if context:
+        if context.get('agm') and str(context['agm']).lower() != 'all':
+            scope_desc = f" under AGM {context['agm']}"
+        elif context.get('ri') and str(context['ri']).lower() != 'all':
+            scope_desc = f" under RI {context['ri']}"
+        elif context.get('zone') and str(context['zone']).lower() != 'all':
+            scope_desc = f" in {context['zone']} Zone"
+        elif context.get('branches') and context['branches'] != ['All'] and len(context['branches']) == 1:
+            scope_desc = f" for {context['branches'][0]}"
+
+    answer = f"Total Zero-Paid Fee Due Balance{scope_desc}: {formatted_val}"
+    return {
+        'function': 'fee_summary',
+        'capability': 'zero_paid_fee_due',
+        'metric': target_metric,
+        'answer': answer,
+        'data': [{target_metric: round(total_val, 2)}],
+    }
+
+
+def run_fee_due_ranking(params: dict, context: dict | None = None):
+    """
+    Ranks branches/zones/RIs by requested fee metric (with explicit top-N if given).
+    """
+    return run_fee_summary(params, context)
+
+
 def run_fee_summary(params: dict, context: dict | None = None):
     """
     Fee due snapshot per branch/zone/RI/AGM/S_Type with strict Output Projection.
@@ -695,23 +878,17 @@ def run_fee_summary(params: dict, context: dict | None = None):
     ]
     branches = params.get('branches') or context_branches or None
 
-    # Handle global scalar total queries (e.g. "What was the last year 2024-25 fee due amount?")
-    if not group_col and not n and not branches and target_metric in ('LY_FD', 'CY_A_FD', 'LY_FDC', 'CY_A_FDC', 'CY_ZP', 'CY_ZP_FD'):
-        metric_col = target_metric
-        col_values = pd.to_numeric(df[metric_col], errors='coerce').fillna(0) if metric_col in df.columns else pd.Series([0])
-        total_val = float(col_values.sum())
-        spec = get_default_metric_registry().get(target_metric)
-        label = spec.display_name if spec else target_metric
-        if 'FD' in target_metric and 'FDC' not in target_metric:
-            formatted_val = f"\u20b9{int(round(total_val)):,}"
-        else:
-            formatted_val = f"{int(total_val):,}"
-        answer = f"Total {label}: {formatted_val}"
-        return {
-            'function': 'fee_summary',
-            'answer': answer,
-            'data': [{target_metric: round(total_val, 2)}],
-        }
+    # Handle global/scoped scalar total queries (e.g. "What was the last year 2024-25 fee due amount?")
+    has_branch_scope = any(k in question.lower() for k in ('branch', 'branches', 'by branch', 'per branch', 'branch-wise', 'branch wise'))
+    if not group_col and not n and not branches and not has_branch_scope and target_metric in ('LY_FD', 'CY_A_FD', 'LY_FDC', 'CY_A_FDC', 'CY_ZP', 'CY_ZP_FD'):
+        if target_metric in ('CY_A_FD', 'LY_FD'):
+            return run_total_fee_due({'metric': target_metric, 'year': params.get('year')}, context)
+        elif target_metric in ('CY_A_FDC', 'LY_FDC'):
+            return run_fee_due_student_count({'metric': target_metric, 'year': params.get('year')}, context)
+        elif target_metric in ('CY_ZP', 'CY_A_ZP'):
+            return run_zero_paid_count({'metric': target_metric}, context)
+        elif target_metric == 'CY_ZP_FD':
+            return run_zero_paid_fee_due({'metric': target_metric}, context)
 
     sort_col = target_metric if target_metric in fee_metrics else params.get('sort_col', 'CY_A_FD')
     columns = params.get('columns') or fee_metrics
@@ -1511,6 +1688,15 @@ def run_ri_teacher_student_ratio_statistics(params: dict, context: dict | None =
     }
 
 
+def run_zone_teacher_student_ratio_statistics(params: dict, context: dict | None = None):
+    """
+    Executes Teacher Student Ratio review for a Zone.
+    """
+    context = context or {}
+    zone_name = context.get('zone') or params.get('zone') or params.get('entity_name') or 'All'
+    return run_group_metric_aggregate({'metric': 'STR', 'group_dimension': 'zone'}, context={**context, 'zone': zone_name})
+
+
 def run_branch_teacher_student_ratio_statistics(params: dict, context: dict | None = None):
     """
     Executes a complete Teacher Student Ratio Statistics Review for a single Branch.
@@ -1709,6 +1895,41 @@ def run_branch_combined_statistics(branch: str | None = None, statistics: list[s
     }
 
 
+def run_zone_combined_statistics(zone: str | None = None, statistics: list[str] | None = None, params: dict | None = None, context: dict | None = None):
+    params = params or {}
+    context = context or {}
+    zone_name = zone or context.get('zone') or params.get('zone') or params.get('entity_name') or 'All'
+    stats = statistics or params.get('statistics') or []
+
+    results = {}
+    if 'dropout' in stats:
+        results['dropout'] = run_zone_dropout_statistics({'zone': zone_name, 'entity_name': zone_name}, context=context)
+    if 'fee_due' in stats:
+        results['fee_due'] = run_fee_summary({'group_dim': 'Zone'}, context={**context, 'zone': zone_name})
+    if 'revenue_salary' in stats:
+        results['revenue_salary'] = run_revenue_salary_summary({}, context={**context, 'zone': zone_name})
+    if 'teacher_student_ratio' in stats:
+        results['teacher_student_ratio'] = run_zone_teacher_student_ratio_statistics({'zone': zone_name}, context=context)
+
+    from .multi_stats import format_combined_statistics
+    answer = format_combined_statistics('Zone', str(zone_name), stats, results)
+    return {
+        'success': True,
+        'intent': 'statistics',
+        'hierarchy': 'Zone',
+        'entity': str(zone_name),
+        'requested_statistics': stats,
+        'function': 'zone_combined_statistics',
+        'answer': answer,
+        'data': {
+            'entity_type': 'Zone',
+            'entity_name': str(zone_name),
+            'requested_statistics': stats,
+            'results': {k: v.get('data', []) for k, v in results.items()}
+        }
+    }
+
+
 def run_multi_statistics(
     hierarchy: str,
     entity: str,
@@ -1717,7 +1938,7 @@ def run_multi_statistics(
     context: dict | None = None,
 ):
     """
-    Generic multi-statistics orchestrator across all hierarchy levels (RI, AGM, Branch).
+    Generic multi-statistics orchestrator across all hierarchy levels (RI, AGM, Branch, Zone).
     Executes only the requested domain functions and combines structured results.
     """
     params = params or {}
@@ -1729,6 +1950,8 @@ def run_multi_statistics(
         return run_ri_combined_statistics(ri=entity, statistics=stats, params=params, context=context)
     elif h_upper == 'BRANCH':
         return run_branch_combined_statistics(branch=entity, statistics=stats, params=params, context=context)
+    elif h_upper == 'ZONE':
+        return run_zone_combined_statistics(zone=entity, statistics=stats, params=params, context=context)
     else:
         return run_agm_combined_statistics(agm=entity, statistics=stats, params=params, context=context)
 
@@ -1748,4 +1971,28 @@ def run_combined_statistics(params: dict | None = None, context: dict | None = N
     return run_multi_statistics(entity_type, entity_name, stats, params=params, context=context)
 
 
+def run_multi_metric_query(params: dict | None = None, context: dict | None = None):
+    """
+    Executes a multi-metric plan query across single or multiple datasets,
+    generating an aligned multi-column table with dynamic ranking and formatting.
+    """
+    from .multi_metric_engine import execute_multi_metric_plan
+    params = params or {}
+    plan = params.get('plan')
+    if not plan:
+        return {'function': 'multi_metric_analysis', 'answer': 'Unable to construct query plan.', 'data': []}
 
+    # Merge any incoming dashboard context into plan scope
+    if context:
+        for k, v in context.items():
+            if v and str(v).lower() != 'all' and k not in plan.scope:
+                plan.scope[k] = v
+
+    analysis = execute_multi_metric_plan(plan)
+    answer = render_operation_response(analysis)
+    return {
+        'function': 'multi_metric_analysis',
+        'answer': answer,
+        'data': analysis.rows,
+        'analysis': analysis,
+    }

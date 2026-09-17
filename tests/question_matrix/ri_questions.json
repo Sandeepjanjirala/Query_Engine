@@ -1,0 +1,402 @@
+[
+  {
+    "id": 1,
+    "question": "What is the current year dropout percentage for RI Anitha?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "DPP",
+    "operation": "scalar",
+    "expected_scope": "RI",
+    "expected_function": "group_metric_aggregate"
+  },
+  {
+    "id": 2,
+    "question": "What is the current year dropout count for RI Anitha?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "DP",
+    "operation": "scalar",
+    "expected_scope": "RI",
+    "expected_function": "group_metric_aggregate"
+  },
+  {
+    "id": 3,
+    "question": "What was RI Anitha's last year dropout percentage?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "DPP",
+    "operation": "scalar",
+    "expected_scope": "RI",
+    "expected_function": "group_metric_aggregate"
+  },
+  {
+    "id": 4,
+    "question": "What was RI Anitha's last year dropout count?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "DP",
+    "operation": "scalar",
+    "expected_scope": "RI",
+    "expected_function": "group_metric_aggregate"
+  },
+  {
+    "id": 5,
+    "question": "How much did RI Anitha's dropout percentage change from last year?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "DPP",
+    "operation": "yoy",
+    "expected_scope": "RI",
+    "expected_function": "compare_dimensions"
+  },
+  {
+    "id": 6,
+    "question": "How much did RI Anitha's dropout count change from last year?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "DP",
+    "operation": "yoy",
+    "expected_scope": "RI",
+    "expected_function": "compare_dimensions"
+  },
+  {
+    "id": 7,
+    "question": "What is RI Anitha's dropout percentage by school level?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "DPP",
+    "operation": "level_comparison",
+    "expected_scope": "RI",
+    "expected_function": "compare_dimensions"
+  },
+  {
+    "id": 8,
+    "question": "Show PP, PS and HS dropout counts for RI Anitha.",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "DP",
+    "operation": "level_comparison",
+    "expected_scope": "RI",
+    "expected_function": "compare_dimensions"
+  },
+  {
+    "id": 9,
+    "question": "Which school level has the highest dropout percentage under RI Anitha?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "DPP",
+    "operation": "level_comparison",
+    "expected_scope": "RI",
+    "expected_function": "compare_dimensions"
+  },
+  {
+    "id": 10,
+    "question": "Which school level has the biggest increase in dropout percentage?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "DPP",
+    "operation": "level_comparison",
+    "expected_scope": "RI",
+    "expected_function": "compare_dimensions"
+  },
+  {
+    "id": 11,
+    "question": "How many existing students dropped out under RI Anitha?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "DP",
+    "operation": "type_scalar",
+    "expected_scope": "RI",
+    "expected_function": "compare_dimensions"
+  },
+  {
+    "id": 12,
+    "question": "How many new students dropped out under RI Anitha?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "DP",
+    "operation": "type_scalar",
+    "expected_scope": "RI",
+    "expected_function": "compare_dimensions"
+  },
+  {
+    "id": 13,
+    "question": "What percentage of RI Anitha's dropouts are existing students?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "DPP",
+    "operation": "type_comparison",
+    "expected_scope": "RI",
+    "expected_function": "compare_dimensions"
+  },
+  {
+    "id": 14,
+    "question": "What percentage of RI Anitha's dropouts are new students?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "DPP",
+    "operation": "type_comparison",
+    "expected_scope": "RI",
+    "expected_function": "compare_dimensions"
+  },
+  {
+    "id": 15,
+    "question": "Show existing and new dropouts by PP, PS and HS.",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "DP",
+    "operation": "type_level",
+    "expected_scope": "RI",
+    "expected_function": "compare_dimensions"
+  },
+  {
+    "id": 16,
+    "question": "Show dropout percentage by branch under RI Anitha.",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "DPP",
+    "operation": "group_comparison",
+    "expected_scope": "Branch",
+    "expected_function": "rank_branches_by_metric"
+  },
+  {
+    "id": 17,
+    "question": "Show dropout count by branch under RI Anitha.",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "DP",
+    "operation": "group_comparison",
+    "expected_scope": "Branch",
+    "expected_function": "rank_branches_by_metric"
+  },
+  {
+    "id": 18,
+    "question": "Which branch has the highest dropout percentage under RI Anitha?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "DPP",
+    "operation": "ranking",
+    "expected_scope": "Branch",
+    "expected_function": "rank_branches_by_metric"
+  },
+  {
+    "id": 19,
+    "question": "Which branch has the highest dropout count?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "DP",
+    "operation": "ranking",
+    "expected_scope": "Branch",
+    "expected_function": "rank_branches_by_metric"
+  },
+  {
+    "id": 20,
+    "question": "Which branch has the biggest increase in dropout percentage?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "DPP",
+    "operation": "yoy_ranking",
+    "expected_scope": "Branch",
+    "expected_function": "year_over_year_ranking"
+  },
+  {
+    "id": 21,
+    "question": "Which branch has the biggest improvement in dropout percentage?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "DPP",
+    "operation": "yoy_ranking",
+    "expected_scope": "Branch",
+    "expected_function": "year_over_year_ranking"
+  },
+  {
+    "id": 22,
+    "question": "Show the top 5 branches by dropout percentage under RI Anitha.",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "DPP",
+    "operation": "ranking",
+    "expected_scope": "Branch",
+    "expected_function": "top_5_dropout_branches"
+  },
+  {
+    "id": 23,
+    "question": "Show branches with dropout percentage above 10% under RI Anitha.",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "DPP",
+    "operation": "threshold",
+    "expected_scope": "Branch",
+    "expected_function": "rank_branches_by_metric"
+  },
+  {
+    "id": 24,
+    "question": "Show all branches under RI Anitha with their current and last year dropout percentage.",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "DPP",
+    "operation": "yoy_ranking",
+    "expected_scope": "Branch",
+    "expected_function": "year_over_year_ranking"
+  },
+  {
+    "id": 25,
+    "question": "Which branch needs the most attention based on dropout percentage?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "DPP",
+    "operation": "ranking",
+    "expected_scope": "Branch",
+    "expected_function": "rank_branches_by_metric"
+  },
+  {
+    "id": 26,
+    "question": "What is the current year fee due for RI Anitha?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "CY_A_FD",
+    "operation": "scalar",
+    "expected_scope": "RI",
+    "expected_function": "fee_summary"
+  },
+  {
+    "id": 27,
+    "question": "What is the last year fee due for RI Anitha?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "LY_FD",
+    "operation": "scalar",
+    "expected_scope": "RI",
+    "expected_function": "fee_summary"
+  },
+  {
+    "id": 28,
+    "question": "How many students have current year fee due?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "CY_A_FDC",
+    "operation": "scalar",
+    "expected_scope": "RI",
+    "expected_function": "fee_summary"
+  },
+  {
+    "id": 29,
+    "question": "How many students have zero-paid fees?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "CY_ZP",
+    "operation": "scalar",
+    "expected_scope": "RI",
+    "expected_function": "fee_summary"
+  },
+  {
+    "id": 30,
+    "question": "What is the current year zero-paid fee due balance?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "CY_ZP_FD",
+    "operation": "scalar",
+    "expected_scope": "RI",
+    "expected_function": "fee_summary"
+  },
+  {
+    "id": 31,
+    "question": "How many students paid fees but did not purchase books?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "CY_FP_BN",
+    "operation": "scalar",
+    "expected_scope": "RI",
+    "expected_function": "fee_books_not_purchased"
+  },
+  {
+    "id": 32,
+    "question": "How many students did not pay fees and did not purchase books?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "CY_FN_BN",
+    "operation": "scalar",
+    "expected_scope": "RI",
+    "expected_function": "fee_books_not_purchased"
+  },
+  {
+    "id": 33,
+    "question": "Which branch has the highest fee due under RI Anitha?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "CY_A_FD",
+    "operation": "ranking",
+    "expected_scope": "Branch",
+    "expected_function": "fee_summary"
+  },
+  {
+    "id": 34,
+    "question": "Which branch has the highest zero-paid fee due?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "CY_ZP_FD",
+    "operation": "ranking",
+    "expected_scope": "Branch",
+    "expected_function": "fee_summary"
+  },
+  {
+    "id": 35,
+    "question": "Which branch has the highest fee paid but books not purchased count?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "CY_FP_BN",
+    "operation": "ranking",
+    "expected_scope": "Branch",
+    "expected_function": "fee_books_not_purchased"
+  },
+  {
+    "id": 36,
+    "question": "What percentage of revenue is spent on salary under RI Anitha?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "SAL_V_REV",
+    "operation": "scalar",
+    "expected_scope": "RI",
+    "expected_function": "revenue_salary_summary"
+  },
+  {
+    "id": 37,
+    "question": "Which branch has the highest salary burden under RI Anitha?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "SAL_V_REV",
+    "operation": "ranking",
+    "expected_scope": "Branch",
+    "expected_function": "revenue_salary_ranking"
+  },
+  {
+    "id": 38,
+    "question": "Which branch has the lowest salary burden?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "SAL_V_REV",
+    "operation": "ranking",
+    "expected_scope": "Branch",
+    "expected_function": "revenue_salary_ranking"
+  },
+  {
+    "id": 39,
+    "question": "What is the teacher-student ratio for RI Anitha?",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "STR",
+    "operation": "scalar",
+    "expected_scope": "RI",
+    "expected_function": "ri_teacher_student_ratio_statistics"
+  },
+  {
+    "id": 40,
+    "question": "Show RI Anitha's dropout, fee due, salary burden and teacher-student ratio.",
+    "hierarchy": "RI",
+    "entity": "Y.Anitha",
+    "metric": "MULTI",
+    "operation": "multi_stats",
+    "expected_scope": "RI",
+    "expected_function": "ri_combined_statistics"
+  }
+]

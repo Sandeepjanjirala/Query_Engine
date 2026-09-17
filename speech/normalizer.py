@@ -102,34 +102,6 @@ def normalize_branch_numbers(text: str) -> str:
     return text
 
 
-def normalize_entity_names(text: str) -> str:
-    """
-    Harmonizes capitalization of common roles and known executive/branch names,
-    resolving common Whisper phonetic splits, mergers, and accents.
-    """
-    # Fix direct Whisper contractions / concatenated outputs (e.g. "RIONita" -> "RI Anitha")
-    text = re.sub(r'\b(?:rionita|r\.?i\.?\s*onita)\b', 'RI Anitha', text, flags=re.IGNORECASE)
-
-    # Strip commas or colons after role prefixes (e.g. "RI, Unita" -> "RI Unita", "AGM, Suresh" -> "AGM Suresh")
-    text = re.sub(r'\b(RI|AGM|Branch|Zone)\s*[,:]\s*', r'\1 ', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bbranche\b', 'Branch', text, flags=re.IGNORECASE)
-
-    # Prefix acoustic variations ("All right Anita" / "Are I Anita" -> "RI Anitha")
-    text = re.sub(r'\b(?:are\s+i|all\s+right)\s+([a-zA-Z]+)', r'RI \1', text, flags=re.IGNORECASE)
-    text = re.sub(r'\b(?:a\s+gm|a\.?g\.?m\.?)\s+([a-zA-Z]+)', r'AGM \1', text, flags=re.IGNORECASE)
-    text = re.sub(r'\b(?:r\.?i\.?)\s+([a-zA-Z]+)', r'RI \1', text, flags=re.IGNORECASE)
-    text = re.sub(r'\ba\s+gm\b', 'AGM', text, flags=re.IGNORECASE)
-
-    # Common Whisper phonetic variations for Indian executive & branch names
-    text = re.sub(r'\b(?:unita|anita|aneetha|anite)\b', 'Anitha', text, flags=re.IGNORECASE)
-    text = re.sub(r'\b(?:sureesh|sooresh|shuresh)\b', 'Suresh', text, flags=re.IGNORECASE)
-    text = re.sub(r'\b(?:ahmed\s*ali)\b', 'Ahmedali', text, flags=re.IGNORECASE)
-    text = re.sub(r'\b(?:kaki\s*nada|cocky\s*nada|cockinada)\b', 'Kakinada', text, flags=re.IGNORECASE)
-    text = re.sub(r'\b(?:bobby\s*lee|bobili)\b', 'Bobbili', text, flags=re.IGNORECASE)
-    text = re.sub(r'\b(?:amulapuram|amlapuram)\b', 'Amalapuram', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bshow(?=[a-zA-Z]{3,})', 'Show ', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bsho(?=[A-Z][a-z]{3,})', 'Show ', text)
-
 KNOWN_CANONICAL_NAMES = {
     'anitha': 'Anitha',
     'suresh': 'Suresh',
@@ -158,6 +130,11 @@ def normalize_entity_names(text: str) -> str:
 
     # Strip commas or colons after role prefixes (e.g. "RI, Unita" -> "RI Unita", "AGM, Suresh" -> "AGM Suresh")
     text = re.sub(r'\b(RI|AGM|Branch|Zone)\s*[,:]\s*', r'\1 ', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bbranche\b', 'Branch', text, flags=re.IGNORECASE)
+
+    # Fix run-together "Show" contractions from fast speech
+    text = re.sub(r'\bshowtop\b', 'Show top', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bshokakinada\b', 'Show Kakinada', text, flags=re.IGNORECASE)
 
     # Prefix acoustic variations ("All right Anita" / "Are I Anita" -> "RI Anitha")
     text = re.sub(r'\b(?:are\s+i|all\s+right)\s+([a-zA-Z]+)', r'RI \1', text, flags=re.IGNORECASE)
@@ -172,7 +149,6 @@ def normalize_entity_names(text: str) -> str:
     text = re.sub(r'\b(?:kaki\s*nada|cocky\s*nada|cockinada)\b', 'Kakinada', text, flags=re.IGNORECASE)
     text = re.sub(r'\b(?:bobby\s*lee|bobili)\b', 'Bobbili', text, flags=re.IGNORECASE)
     text = re.sub(r'\b(?:amulapuram|amlapuram)\b', 'Amalapuram', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bsho(?=[a-z]{4,})', 'Show ', text, flags=re.IGNORECASE)
 
     for lower, proper in KNOWN_CANONICAL_NAMES.items():
         text = re.sub(rf'\b{lower}\b', proper, text, flags=re.IGNORECASE)
@@ -268,9 +244,8 @@ def normalize_speech_transcript(raw_text: str) -> Tuple[str, str]:
     # Clean redundant whitespace
     normalized = re.sub(r'\s+', ' ', step4).strip()
 
-    # Remove trailing period if added by Whisper on a short query
-    if normalized.endswith('.') and not raw.endswith('.'):
-        normalized = normalized[:-1].strip()
+    # Always strip trailing punctuation (. ? ! ,) so downstream routers receive clean tokens
+    normalized = normalized.rstrip('.?!, ').strip()
 
     return raw, normalized
 

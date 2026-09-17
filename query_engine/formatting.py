@@ -95,10 +95,28 @@ def format_group_aggregate(results: list[dict], metric: str, group_dimension: st
     return render_operation_response(analysis)
 
 
-def format_year_over_year(results: list[dict], metric: str = 'NS', context: dict | None = None) -> str:
+def format_year_over_year(
+    results: list[dict],
+    metric: str = 'NS',
+    context: dict | None = None,
+    ascending: bool = False,
+    direction: str | None = None,
+) -> str:
+    spec = get_default_metric_registry().get(metric)
+    lbl = spec.display_name if spec else _metric_label(metric)
     if not results:
-        return f'No year-over-year data is available for {_metric_label(metric)}.'
-    analysis = build_ranking_analysis(results, metric=metric, ascending=False, group_dimension='Branch', operation='yoy', context=context)
+        if direction == 'negative':
+            return f"No entities showed an improvement in {lbl}."
+        return f'No year-over-year data is available for {lbl}.'
+    analysis = build_ranking_analysis(
+        results,
+        metric=metric,
+        ascending=ascending,
+        group_dimension='Branch',
+        operation='yoy',
+        context=context,
+        direction=direction,
+    )
     return render_operation_response(analysis)
 
 
@@ -186,11 +204,20 @@ def format_threshold_result(res: dict, metric: str) -> str:
         ]
         for idx, item in enumerate(res['records'], start=1):
             name = item.get('group') or item.get('branch')
-            cy = item.get('current_year', item.get('value', 0))
-            ly = item.get('previous_year', 0)
-            diff = item.get('difference', cy - ly)
-            sign = '+' if diff >= 0 else ''
-            lines.append(f"| {idx} | {name} | {cy:.2f}{unit} | {ly:.2f}{unit} | {sign}{diff:.2f}{diff_unit} |")
+            cy = item.get('current_year') if item.get('current_year') is not None else item.get('value')
+            ly = item.get('previous_year')
+            diff = item.get('difference')
+            if diff is None and cy is not None and ly is not None:
+                diff = cy - ly
+
+            cy_str = f"{cy:.2f}{unit}" if cy is not None else "N/A"
+            ly_str = f"{ly:.2f}{unit}" if ly is not None else "N/A"
+            if diff is not None:
+                sign = '+' if diff >= 0 else ''
+                diff_str = f"{sign}{diff:.2f}{diff_unit}"
+            else:
+                diff_str = "N/A"
+            lines.append(f"| {idx} | {name} | {cy_str} | {ly_str} | {diff_str} |")
         return '\n'.join(lines)
 
     lines = [f"{count} {target_entity} with {_metric_label(metric)} {op_symbol} {res['threshold']}:"]
@@ -243,11 +270,17 @@ def format_dimension_comparison(res: dict, metric: str, dimension_type: str) -> 
         '| --- | --- | --- | --- |'
     ]
     for item in res['data']:
-        diff = item.get('difference', item.get('change', 0))
-        ly = item.get('previous_year', item.get('last_year', 0))
+        diff = item.get('difference', item.get('change'))
+        ly = item.get('previous_year', item.get('last_year'))
         cy = item.get('current_year', item.get('value', 0))
-        sign = '+' if diff >= 0 else ''
-        lines.append(f"| {item['category']} | {cy:.2f}{val_unit} | {ly:.2f}{val_unit} | {sign}{diff:.2f}{unit} |")
+        cy_str = f"{cy:.2f}{val_unit}" if cy is not None else "N/A"
+        ly_str = f"{ly:.2f}{val_unit}" if ly is not None else "N/A"
+        if diff is not None:
+            sign = '+' if diff >= 0 else ''
+            diff_str = f"{sign}{diff:.2f}{unit}"
+        else:
+            diff_str = "N/A"
+        lines.append(f"| {item['category']} | {cy_str} | {ly_str} | {diff_str} |")
 
     if res.get('winner'):
         w = res['winner']
@@ -290,7 +323,7 @@ def format_room_ratio(results: list[dict], ratio_type: str, ascending: bool | No
     return '\n'.join(lines)
 
 
-def format_scope_total(val: float, metric: str) -> str:
+def format_scope_total(val: float, metric: str, level: str | None = None, type_: str | None = None) -> str:
     spec = get_default_metric_registry().get(metric)
     unit = '%' if (spec and spec.data_type == 'percentage') or 'dpp' in metric.lower() or 'pct' in metric.lower() else ''
     if spec and spec.data_type == 'currency':
@@ -298,8 +331,14 @@ def format_scope_total(val: float, metric: str) -> str:
     else:
         val_str = f"{val:.2f}{unit}"
     label = _metric_label(metric)
+    prefix_tags = []
+    if level:
+        prefix_tags.append(level)
+    if type_:
+        prefix_tags.append('Existing' if type_ == 'E' else ('New' if type_ == 'N' else type_))
+    tag_str = f" {' '.join(prefix_tags)}" if prefix_tags else ""
     prefix = 'Average' if unit == '%' else ('Total' if spec and spec.data_type in ('count', 'currency') else 'Overall')
-    return f"{prefix} {label} in current scope: {val_str}"
+    return f"{prefix}{tag_str} {label} in current scope: {val_str}"
 
 
 # ---------------------------------------------------------------------------

@@ -114,11 +114,20 @@ def detect_entity_level_and_name(question: str, context: Dict[str, Any] | None =
         if str(ctx['branches'][0]).strip().lower() != 'all':
             branch_name = ctx['branches'][0]
 
+    zone_name = ctx.get('zone')
+    if zone_name and str(zone_name).strip().lower() != 'all':
+        return 'Zone', str(zone_name).strip()
+
     if branch_name and str(branch_name).strip().lower() != 'all':
         return 'Branch', str(branch_name).strip()
 
     # 2. Explicit keyword checks in question
     q_low = question.lower()
+    if 'zone ' in q_low or q_low.startswith('zone ') or ' zone' in q_low:
+        m = re.search(r'\b(?:zone\s+([A-Za-z0-9\.\s]+?)|([A-Za-z0-9\.\s]+?)\s+zone(?:\'s)?)(?:\s+(?:drop|fee|rev|sal|teach|stud|stat|and|,|\'s)|$)', question, re.IGNORECASE)
+        name = (m.group(1) or m.group(2) or 'All').strip() if m else 'All'
+        return 'Zone', name
+
     if 'ri ' in q_low or q_low.startswith('ri '):
         m = re.search(r'\bri\s+([A-Za-z0-9\.\s]+?)(?:\s+(?:drop|fee|rev|sal|teach|stud|stat|and|,)|$)', question, re.IGNORECASE)
         name = m.group(1).strip() if m else 'All'
@@ -1145,6 +1154,205 @@ def _build_branch_overall_report(
     return title + "\n".join(rendered_sections)
 
 
+def _build_zone_overall_report(
+    zone_name: str,
+    results: Dict[str, Dict[str, Any]],
+    requested_statistics: List[str] | None = None,
+) -> str:
+    """
+    Builds the analytical report for a Zone with selective sequential section numbering.
+    When all 4 domain statistics are requested, renders full 7 sections including Branch Performance.
+    When a subset is requested, renders only requested domain sections plus Conclusion.
+    """
+    from .orchestrator import get_dataframe
+    from .params import resolve_single_entity
+    df_main = get_dataframe()
+
+    disp_name = str(zone_name).strip()
+    zone_col = 'Zone' if 'Zone' in df_main.columns else 'Zone Name'
+
+    cand_zones = list(df_main[zone_col].dropna().unique()) if zone_col in df_main.columns else []
+    matched_zone = resolve_single_entity(str(zone_name), cand_zones, 'zone') if zone_name != 'All' else 'All'
+    zone_main = df_main[df_main[zone_col] == matched_zone] if (matched_zone and matched_zone != 'All' and zone_col in df_main.columns) else df_main
+
+    ri_col = 'RI Name' if 'RI Name' in zone_main.columns else ('RI' if 'RI' in zone_main.columns else 'RI Name')
+    n_ris = zone_main[ri_col].nunique() if ri_col in zone_main.columns else 0
+    n_branches = zone_main['Branch'].nunique() if 'Branch' in zone_main.columns else len(zone_main)
+
+    req = requested_statistics if requested_statistics else ALL_STATISTICS
+    rendered_sections = []
+    sec_idx = 1
+
+    # 1. About This Zone
+    sec1 = (
+        f"#### {sec_idx}. About This Zone\n\n"
+        f"Zone {disp_name} covers {n_branches} branches across {n_ris} RI{'s' if n_ris != 1 else ''}.\n"
+    )
+    rendered_sections.append(sec1)
+
+    # 2. Overall Dropout Situation
+    dp_res = results.get('dropout', {})
+    dp_analysis = dp_res.get('analysis')
+    dp_sections = dp_analysis.sections if dp_analysis and hasattr(dp_analysis, 'sections') else []
+
+    cy_dp = float(pd.to_numeric(zone_main['CY-DP'], errors='coerce').sum()) if 'CY-DP' in zone_main.columns else 0.0
+    ly_dp = float(pd.to_numeric(zone_main['LY-DP'], errors='coerce').sum()) if 'LY-DP' in zone_main.columns else 0.0
+    cy_ns = float(pd.to_numeric(zone_main['CY-NS'], errors='coerce').sum()) if 'CY-NS' in zone_main.columns else 0.0
+    ly_ns = float(pd.to_numeric(zone_main['LY-NS'], errors='coerce').sum()) if 'LY-NS' in zone_main.columns else 0.0
+
+    cy_dpp = (cy_dp / cy_ns * 100) if cy_ns > 0 else 0.0
+    ly_dpp = (ly_dp / ly_ns * 100) if ly_ns > 0 else 0.0
+    dpp_diff = cy_dpp - ly_dpp
+    dp_change = cy_dp - ly_dp
+    dp_pct_change = (dp_change / ly_dp * 100) if ly_dp > 0 else 0.0
+
+    if STAT_DROPOUT in req:
+        sec_idx += 1
+        dpp_eval = "an improvement" if dpp_diff <= 0 else "an increase"
+        sec2_lines = [
+            f"#### {sec_idx}. Overall Dropout Situation\n",
+            f"The overall dropout percentage is **{cy_dpp:.2f}%** ({int(round(cy_dp)):,} dropouts out of {int(round(cy_ns)):,} students), compared with **{ly_dpp:.2f}% last year** ({int(round(ly_dp)):,} dropouts out of {int(round(ly_ns)):,}), {dpp_eval} of **{abs(dpp_diff):.2f} percentage points** (a **{abs(dp_pct_change):.2f}%** change in total dropouts).\n",
+        ]
+        dp_lvl = _find_section_content(dp_sections, ['breakdown by school level', 'level'])
+        if dp_lvl:
+            sec2_lines.append(dp_lvl + "\n")
+        dp_att = _find_section_content(dp_sections, ['branches needing attention', 'attention'])
+        if dp_att:
+            sec2_lines.append(dp_att + "\n")
+        sec2 = "\n".join(sec2_lines)
+        rendered_sections.append(sec2)
+
+    # 3. Fee Due Position
+    fd_res = results.get('fee_due', {})
+    fd_analysis = fd_res.get('analysis')
+    fd_sections = fd_analysis.sections if fd_analysis and hasattr(fd_analysis, 'sections') else []
+
+    if STAT_FEE_DUE in req:
+        sec_idx += 1
+        sec3_lines = [f"#### {sec_idx}. Fee Due Position\n"]
+        for s_title in ['current year fee due', 'last year fee due', 'zero-paid students', 'conclusion']:
+            c = _find_section_content(fd_sections, [s_title])
+            if c:
+                sec3_lines.append(c + "\n")
+        sec3 = "\n".join(sec3_lines)
+        rendered_sections.append(sec3)
+
+    # 4. Revenue vs Salary Burden
+    rev_res = results.get('revenue_salary', {})
+    rev_analysis = rev_res.get('analysis')
+    rev_sections = rev_analysis.sections if rev_analysis and hasattr(rev_analysis, 'sections') else []
+
+    rev_p1 = _find_section_content(rev_sections, ['overall zone situation', 'overall situation', 'executive summary', 'zone'])
+    m_pct_zone = re.search(r'(\d+(?:\.\d+)?)\s*%', rev_p1) if rev_p1 else None
+
+    if STAT_REVENUE_SALARY in req:
+        sec_idx += 1
+        sec4_lines = [f"#### {sec_idx}. Revenue vs Salary Burden\n"]
+        for s_title in ['overall zone situation', 'overall situation', 'segment-wise breakdown', 'branches with high salary burden', 'conclusion']:
+            c = _find_section_content(rev_sections, [s_title])
+            if c:
+                sec4_lines.append(c + "\n")
+        sec4 = "\n".join(sec4_lines)
+        rendered_sections.append(sec4)
+
+    # 5. Teacher-Student Ratio
+    str_res = results.get('teacher_student_ratio', {})
+    str_analysis = str_res.get('analysis')
+    str_sections = str_analysis.sections if str_analysis and hasattr(str_analysis, 'sections') else []
+
+    str_p1 = _find_section_content(str_sections, ['overall staffing & ratio summary', 'overall staffing'])
+    str_lvl = _find_section_content(str_sections, ['level-wise staffing ratios', 'level-wise staffing'])
+    str_att = _find_section_content(str_sections, ['branches needing attention'])
+
+    m_str_val = re.search(r'Student-Teacher Ratio of \*\*(\d+(?:\.\d+)?)\*\*\s*\((.*?)\)', str_p1, re.IGNORECASE) if str_p1 else None
+    if m_str_val:
+        cy_str_val = m_str_val.group(1)
+        diff_str = m_str_val.group(2)
+        m_ly_str = re.search(r'last year\'s (\d+(?:\.\d+)?)', diff_str)
+        ly_str_val = m_ly_str.group(1) if m_ly_str else ''
+        m_diff_num = re.search(r'([+-]?\d+(?:\.\d+)?)', diff_str)
+        diff_val = float(m_diff_num.group(1)) if m_diff_num else 0.0
+        eval_text = "an improvement" if diff_val <= 0 else "an increase"
+        if ly_str_val:
+            exec_str_line = f"The Student-Teacher Ratio is **{cy_str_val} students per teacher**, compared with **{ly_str_val} last year**, {eval_text} of **{abs(diff_val):.2f}**."
+        else:
+            exec_str_line = f"The Student-Teacher Ratio is **{cy_str_val} students per teacher**."
+    else:
+        exec_str_line = str_p1.split('\n\n')[0].strip() if str_p1 else "Student-teacher ratios evaluated across all levels."
+
+    if STAT_STR in req:
+        sec_idx += 1
+        sec5_lines = [
+            f"#### {sec_idx}. Teacher-Student Ratio\n",
+            exec_str_line + "\n",
+        ]
+        if str_lvl:
+            sec5_lines.append(str_lvl + "\n")
+        if str_att:
+            sec5_lines.append(str_att + "\n")
+        sec5 = "\n".join(sec5_lines)
+        rendered_sections.append(sec5)
+
+    # 6. Branch Performance
+    if set(req) >= set(ALL_STATISTICS):
+        sec_idx += 1
+        b_perf_map = {}
+        dp_rows = dp_analysis.rows if dp_analysis and hasattr(dp_analysis, 'rows') else []
+        for r in dp_rows:
+            if r and len(r) >= 5:
+                b_perf_map[str(r[0])] = {'dpp': str(r[4])}
+        fd_rows = fd_analysis.rows if fd_analysis and hasattr(fd_analysis, 'rows') else []
+        for r in fd_rows:
+            if r and len(r) >= 2 and str(r[0]) in b_perf_map:
+                b_perf_map[str(r[0])]['fee_due'] = str(r[1])
+        rev_rows = rev_analysis.rows if rev_analysis and hasattr(rev_analysis, 'rows') else []
+        for r in rev_rows:
+            if r and len(r) >= 4 and str(r[0]) in b_perf_map:
+                b_perf_map[str(r[0])]['sal_pct'] = str(r[3])
+        str_rows = str_analysis.rows if str_analysis and hasattr(str_analysis, 'rows') else []
+        for r in str_rows:
+            if r and len(r) >= 3 and str(r[0]) in b_perf_map:
+                b_perf_map[str(r[0])]['str'] = str(r[2])
+
+        sec6_lines = [
+            f"#### {sec_idx}. Branch Performance\n",
+            "| Branch | Current Year Dropout % | Current Year Fee Due | Salary vs Revenue % | Student-Teacher Ratio |",
+            "| :--- | ---: | ---: | ---: | ---: |",
+        ]
+        for b_n, p_dict in b_perf_map.items():
+            sec6_lines.append(
+                f"| {b_n} | {p_dict.get('dpp', 'N/A')} | {p_dict.get('fee_due', '₹0')} | {p_dict.get('sal_pct', 'N/A')} | {p_dict.get('str', 'N/A')} |"
+            )
+        sec6 = "\n".join(sec6_lines) + "\n"
+        rendered_sections.append(sec6)
+
+    # 7. Overall Conclusion
+    sec_idx += 1
+    dpp_eval_zone = "an improvement" if dpp_diff <= 0 else "an increase"
+    sec7_lines = [f"#### {sec_idx}. Overall Conclusion\n"]
+
+    if STAT_DROPOUT in req:
+        sec7_lines.append(f"* **Dropouts:** Overall dropout percentage across Zone {disp_name} is **{cy_dpp:.2f}%** ({int(round(cy_dp)):,} dropouts), showing {dpp_eval_zone} of {abs(dpp_diff):.2f} percentage points from {ly_dpp:.2f}% last year.")
+
+    if STAT_FEE_DUE in req:
+        sec7_lines.append(f"* **Fee Due:** Fee collections and zero-paid balances monitored across branches in {disp_name} zone.")
+
+    if STAT_REVENUE_SALARY in req:
+        if m_pct_zone:
+            sec7_lines.append(f"* **Revenue vs Salary:** Salary costs represent **{m_pct_zone.group(1)}% of total revenue** across the zone.")
+        else:
+            sec7_lines.append(f"* **Revenue vs Salary:** Revenue and salary metrics tracked across branches in {disp_name} zone.")
+
+    if STAT_STR in req:
+        sec7_lines.append(f"* **Teacher-Student Ratio:** Staffing and student-teacher ratios monitored across branches in {disp_name} zone.")
+
+    sec7 = "\n".join(sec7_lines) + "\n"
+    rendered_sections.append(sec7)
+
+    title = f"### Zone {disp_name} — Statistics\n\n"
+    return title + "\n".join(rendered_sections)
+
+
 def format_combined_statistics(
     entity_type: str,
     entity_name: str,
@@ -1159,6 +1367,8 @@ def format_combined_statistics(
         return _build_ri_overall_report(entity_name, results, requested_statistics=statistics)
     elif entity_type == 'AGM':
         return _build_agm_overall_report(entity_name, results, requested_statistics=statistics)
+    elif entity_type == 'Zone':
+        return _build_zone_overall_report(entity_name, results, requested_statistics=statistics)
     elif entity_type == 'Branch':
         return _build_branch_overall_report(entity_name, results, requested_statistics=statistics)
     else:

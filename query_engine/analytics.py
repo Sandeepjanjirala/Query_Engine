@@ -25,11 +25,11 @@ from .glossary import (
 def _resolve_cy_ly_cols(df: pd.DataFrame, column: str) -> tuple[str | None, str | None]:
     """Helper to resolve Current Year (CY) and Last Year (LY) column names in df."""
     if column in df.columns:
-        if column.startswith('CY-') or column.startswith('CY_'):
-            ly = column.replace('CY-', 'LY-').replace('CY_', 'LY_')
+        if '-CY-' in column or column.startswith(('CY-', 'CY_')):
+            ly = column.replace('-CY-', '-LY-').replace('CY-', 'LY-').replace('CY_', 'LY_')
             return column, ly if ly in df.columns else None
-        if column.startswith('LY-') or column.startswith('LY_'):
-            cy = column.replace('LY-', 'CY-').replace('LY_', 'CY_')
+        if '-LY-' in column or column.startswith(('LY-', 'LY_')):
+            cy = column.replace('-LY-', '-CY-').replace('LY-', 'CY-').replace('LY_', 'CY_')
             return cy if cy in df.columns else column, column
 
     cy = f"CY-{column}" if f"CY-{column}" in df.columns else (f"CY_{column}" if f"CY_{column}" in df.columns else (column if column in df.columns else None))
@@ -65,14 +65,14 @@ def rank_branches_by_metric(
     results = []
     for rank, (_, row) in enumerate(work.iterrows(), start=1):
         cy_val = float(row[cy_col]) if (cy_col and cy_col in row.index and not pd.isna(row[cy_col])) else float(row[col_to_sort])
-        ly_val = float(row[ly_col]) if (ly_col and ly_col in row.index and not pd.isna(row[ly_col])) else 0.0
-        diff = cy_val - ly_val
+        ly_val = float(row[ly_col]) if (ly_col and ly_col in row.index and not pd.isna(row[ly_col])) else None
+        diff = round(cy_val - ly_val, 2) if ly_val is not None else None
         results.append({
             'rank': rank,
             'branch': str(row[BRANCH_COLUMN]),
             'current_year': round(cy_val, 2),
-            'previous_year': round(ly_val, 2),
-            'difference': round(diff, 2),
+            'previous_year': round(ly_val, 2) if ly_val is not None else None,
+            'difference': diff,
             'value': round(float(row[col_to_sort]), 2),
         })
     return results
@@ -135,8 +135,18 @@ def aggregate_by_group(
         num_col = spec.numerator_metric
         den_col = spec.denominator_metric
 
-        cy_num, ly_num = _resolve_cy_ly_cols(df, num_col)
-        cy_den, ly_den = _resolve_cy_ly_cols(df, den_col)
+        # Check if value_column has level/type prefix (e.g. 'PP-CY-DPP', 'HS-CY-DPP', 'E-CY-DPP', 'PP-E-CY-DPP')
+        prefix_match = re.match(r'^((?:(?:PP|PS|HS|E|N)[-_])+)', value_column)
+        prefix = prefix_match.group(1) if prefix_match else ""
+
+        if prefix:
+            cy_num = f"{prefix}CY-{num_col}" if f"{prefix}CY-{num_col}" in df.columns else (f"{prefix}{num_col}" if f"{prefix}{num_col}" in df.columns else None)
+            ly_num = f"{prefix}LY-{num_col}" if f"{prefix}LY-{num_col}" in df.columns else None
+            cy_den = f"{prefix}CY-{den_col}" if f"{prefix}CY-{den_col}" in df.columns else (f"{prefix}{den_col}" if f"{prefix}{den_col}" in df.columns else None)
+            ly_den = f"{prefix}LY-{den_col}" if f"{prefix}LY-{den_col}" in df.columns else None
+        else:
+            cy_num, ly_num = _resolve_cy_ly_cols(df, num_col)
+            cy_den, ly_den = _resolve_cy_ly_cols(df, den_col)
 
         if cy_num and cy_den and cy_num in df.columns and cy_den in df.columns:
             cols_needed = [group_column, cy_num, cy_den]
@@ -164,7 +174,7 @@ def aggregate_by_group(
                 valid_ly_d = ly_d_sum.replace(0, pd.NA)
                 ly_series = (ly_n_sum / valid_ly_d) * (100.0 if spec.data_type == 'percentage' else 1.0)
             else:
-                ly_series = pd.Series(0.0, index=cy_series.index)
+                ly_series = None
 
             sorted_keys = cy_series.dropna().sort_values(ascending=ascending).index
             if n is not None and n > 0:
@@ -172,13 +182,18 @@ def aggregate_by_group(
 
             results = []
             for key in sorted_keys:
-                c_val = round(float(cy_series.get(key, 0.0)), 2)
-                l_val = round(float(ly_series.get(key, 0.0)), 2)
+                c_val = round(float(cy_series.get(key)), 2) if pd.notna(cy_series.get(key)) else None
+                if ly_series is not None and pd.notna(ly_series.get(key)):
+                    l_val = round(float(ly_series.get(key)), 2)
+                    diff = round(c_val - l_val, 2) if c_val is not None else None
+                else:
+                    l_val = None
+                    diff = None
                 results.append({
                     'group': str(key),
                     'current_year': c_val,
                     'previous_year': l_val,
-                    'difference': round(c_val - l_val, 2),
+                    'difference': diff,
                     'value': c_val,
                 })
             return results
@@ -202,15 +217,16 @@ def aggregate_by_group(
     grouped = work.groupby(group_column)
 
     is_pct = (spec and spec.data_type == 'percentage') or 'DPP' in val_col or 'percentage' in str(val_col).lower() or 'ratio' in str(val_col).lower()
+    has_ly = bool(ly_col and ly_col in work.columns)
     if agg == 'mean' or is_pct:
         cy_series = grouped[val_col].mean()
-        ly_series = grouped[ly_col].mean() if (ly_col and ly_col in work.columns) else pd.Series(0.0, index=cy_series.index)
+        ly_series = grouped[ly_col].mean() if has_ly else None
     elif agg == 'count':
         cy_series = grouped[val_col].count()
-        ly_series = grouped[ly_col].count() if (ly_col and ly_col in work.columns) else pd.Series(0.0, index=cy_series.index)
+        ly_series = grouped[ly_col].count() if has_ly else None
     else:
         cy_series = grouped[val_col].sum()
-        ly_series = grouped[ly_col].sum() if (ly_col and ly_col in work.columns) else pd.Series(0.0, index=cy_series.index)
+        ly_series = grouped[ly_col].sum() if has_ly else None
 
     sorted_keys = cy_series.dropna().sort_values(ascending=ascending).index
     if n is not None and n > 0:
@@ -218,13 +234,18 @@ def aggregate_by_group(
 
     results = []
     for key in sorted_keys:
-        c_val = round(float(cy_series.get(key, 0.0)), 2)
-        l_val = round(float(ly_series.get(key, 0.0)), 2) if ly_col in work.columns else 0.0
+        c_val = round(float(cy_series.get(key)), 2) if pd.notna(cy_series.get(key)) else None
+        if ly_series is not None and pd.notna(ly_series.get(key)):
+            l_val = round(float(ly_series.get(key)), 2)
+            diff = round(c_val - l_val, 2) if c_val is not None else None
+        else:
+            l_val = None
+            diff = None
         results.append({
             'group': str(key),
             'current_year': c_val,
             'previous_year': l_val,
-            'difference': round(c_val - l_val, 2),
+            'difference': diff,
             'value': c_val,
         })
     return results
@@ -293,6 +314,7 @@ def year_over_year_ranking(
     n: int | None = 5,
     ascending: bool = False,
     sort_by: str = 'change',
+    direction: str | None = None,
 ) -> list[dict]:
     """Branches ranked by CY-minus-LY change on a metric that has both a CY and LY column."""
     work = df[[BRANCH_COLUMN, cy_column, ly_column]].copy()
@@ -300,6 +322,11 @@ def year_over_year_ranking(
     work[ly_column] = pd.to_numeric(work[ly_column], errors='coerce')
     work = work.dropna(subset=[BRANCH_COLUMN, cy_column, ly_column])
     work['change'] = work[cy_column] - work[ly_column]
+
+    if direction == 'negative':
+        work = work[work['change'] < 0]
+    elif direction == 'positive':
+        work = work[work['change'] > 0]
 
     if sort_by == 'absolute':
         work['abs_change'] = work['change'].abs()
@@ -357,17 +384,23 @@ def filter_by_threshold(
             matches = series[series == threshold]
 
         cy_col, ly_col = _resolve_cy_ly_cols(df, column if column else '')
-        ly_series = work.groupby(group_column)[ly_col].mean() if (ly_col and ly_col in work.columns and agg == 'mean') else (work.groupby(group_column)[ly_col].sum() if (ly_col and ly_col in work.columns) else pd.Series(0.0, index=series.index))
+        has_ly = bool(ly_col and ly_col in work.columns)
+        ly_series = work.groupby(group_column)[ly_col].mean() if (has_ly and agg == 'mean') else (work.groupby(group_column)[ly_col].sum() if has_ly else None)
 
         records = []
         for k, v in matches.sort_values(ascending=False).items():
             cy_val = round(float(v), 2)
-            ly_val = round(float(ly_series.get(k, 0.0)), 2)
+            if ly_series is not None and pd.notna(ly_series.get(k)):
+                ly_val = round(float(ly_series.get(k)), 2)
+                diff = round(cy_val - ly_val, 2)
+            else:
+                ly_val = None
+                diff = None
             records.append({
                 'group': str(k),
                 'current_year': cy_val,
                 'previous_year': ly_val,
-                'difference': round(cy_val - ly_val, 2),
+                'difference': diff,
                 'value': cy_val,
             })
         return {
@@ -404,14 +437,14 @@ def filter_by_threshold(
     records = []
     for rank, (_, row) in enumerate(matched.iterrows(), start=1):
         cy_val = float(row[cy_col]) if (cy_col and cy_col in row.index and not pd.isna(row[cy_col])) else float(row[col_to_use])
-        ly_val = float(row[ly_col]) if (ly_col and ly_col in row.index and not pd.isna(row[ly_col])) else 0.0
-        diff = cy_val - ly_val
+        ly_val = float(row[ly_col]) if (ly_col and ly_col in row.index and not pd.isna(row[ly_col])) else None
+        diff = round(cy_val - ly_val, 2) if ly_val is not None else None
         records.append({
             'rank': rank,
             'branch': str(row[BRANCH_COLUMN]),
             'current_year': round(cy_val, 2),
-            'previous_year': round(ly_val, 2),
-            'difference': round(diff, 2),
+            'previous_year': round(ly_val, 2) if ly_val is not None else None,
+            'difference': diff,
             'value': round(float(row[col_to_use]), 2),
         })
     return {
@@ -490,6 +523,9 @@ def compare_dimensions(
         return {'comparison_type': 'yoy_breakdown', 'data': results, 'winner': None}
 
     if group_column:
+        from .metric_registry import get_default_metric_registry
+        registry = get_default_metric_registry()
+
         groups = df[group_column].dropna().unique()
         data = []
         for g in sorted(groups):
@@ -497,8 +533,29 @@ def compare_dimensions(
             row = {'group': str(g)}
             for label, col in columns_map.items():
                 if col in g_df.columns:
+                    spec = registry.get(col)
+                    if spec and spec.metric_type == 'derived' and spec.numerator_metric and spec.denominator_metric:
+                        num_col = spec.numerator_metric
+                        den_col = spec.denominator_metric
+                        if num_col in g_df.columns and den_col in g_df.columns:
+                            n_sum = pd.to_numeric(g_df[num_col], errors='coerce').sum()
+                            d_sum = pd.to_numeric(g_df[den_col], errors='coerce').sum()
+                            if d_sum > 0:
+                                mult = 100.0 if spec.data_type == 'percentage' else 1.0
+                                row[label] = round(float((n_sum / d_sum) * mult), 2)
+                                continue
+                    if 'dpp' in col.lower():
+                        time_part = 'CY' if 'cy' in col.lower() else ('LY' if 'ly' in col.lower() else '')
+                        dp_col = f"{time_part}-DP" if time_part else 'CY-DP'
+                        gs_col = f"{time_part}-GS" if time_part else 'CY-GS'
+                        if dp_col in g_df.columns and gs_col in g_df.columns:
+                            dp_s = pd.to_numeric(g_df[dp_col], errors='coerce').sum()
+                            gs_s = pd.to_numeric(g_df[gs_col], errors='coerce').sum()
+                            if gs_s > 0:
+                                row[label] = round(float((dp_s / gs_s) * 100.0), 2)
+                                continue
                     val = pd.to_numeric(g_df[col], errors='coerce').dropna()
-                    row[label] = round(float(val.mean() if agg == 'mean' else val.sum()), 2)
+                    row[label] = round(float(val.mean() if agg == 'mean' or 'dpp' in col.lower() or 'pct' in col.lower() else val.sum()), 2)
                 else:
                     row[label] = 0.0
             data.append(row)
@@ -591,8 +648,8 @@ def calculate_room_ratio(
             'novr': int(row['NOVR']),
             'percentage': round(float(row['percentage']), 2),
             'current_year': round(float(row['percentage']), 2),
-            'previous_year': 0.0,
-            'difference': round(float(row['percentage']), 2),
+            'previous_year': None,
+            'difference': None,
         }
         for rank, (_, row) in enumerate(work.iterrows(), start=1)
     ]
@@ -622,15 +679,15 @@ def top_5_dropout_branches(df: pd.DataFrame) -> list[dict]:
     results = []
     for rank, (_, row) in enumerate(work.iterrows(), start=1):
         cy_val = float(row[col_to_use])
-        ly_val = float(row[ly_col]) if (ly_col and ly_col in row.index and not pd.isna(row[ly_col])) else 0.0
-        diff = cy_val - ly_val
+        ly_val = float(row[ly_col]) if (ly_col and ly_col in row.index and not pd.isna(row[ly_col])) else None
+        diff = round(cy_val - ly_val, 2) if ly_val is not None else None
         results.append({
             'rank': rank,
             'branch': str(row[BRANCH_COLUMN]),
             'dropout_percentage': round(cy_val, 2),
             'current_year': round(cy_val, 2),
-            'previous_year': round(ly_val, 2),
-            'difference': round(diff, 2),
+            'previous_year': round(ly_val, 2) if ly_val is not None else None,
+            'difference': diff,
         })
     return results
 
@@ -952,23 +1009,23 @@ def revenue_salary_ranking(
 
     # Map generic metric names
     m_upper = metric.upper()
-    if m_upper in ('REVENUE', 'NET_REVENUE', 'TOT_REV_N'):
+    if m_upper in ('REVENUE', 'NET_REVENUE', 'TOT_REV_N', 'REV_N', 'REV'):
         sort_metric = 'total_revenue'
-    elif m_upper in ('SALARY', 'EMPLOYEE_COST', 'TOT_SAL'):
+    elif m_upper in ('SALARY', 'EMPLOYEE_COST', 'TOT_SAL', 'SAL'):
         sort_metric = 'total_salary'
     elif m_upper in ('SURPLUS', 'NET_SURPLUS'):
         sort_metric = 'surplus'
-    elif m_upper in ('STUDENTS', 'TOT_NS'):
+    elif m_upper in ('STUDENTS', 'TOT_NS', 'NS'):
         sort_metric = 'total_students'
-    elif m_upper in ('EMPLOYEES', 'TOT_SC'):
+    elif m_upper in ('EMPLOYEES', 'TOT_SC', 'SC'):
         sort_metric = 'total_employees'
-    elif m_upper in ('FEE_AVERAGE', 'TOT_FA'):
+    elif m_upper in ('FEE_AVERAGE', 'TOT_FA', 'FA'):
         sort_metric = 'fee_average'
-    elif m_upper in ('COST_PER_STUDENT', 'TOT_CS'):
+    elif m_upper in ('COST_PER_STUDENT', 'TOT_CS', 'CS'):
         sort_metric = 'cost_per_student'
-    elif m_upper in ('SALARY_VS_REVENUE', 'TOT_SAL_V_REV'):
+    elif m_upper in ('SALARY_VS_REVENUE', 'TOT_SAL_V_REV', 'SAL_V_REV', 'SAL_BURDEN', 'SALARY_BURDEN'):
         sort_metric = 'salary_vs_revenue_pct'
-    elif m_upper in ('STUDENT_TEACHER_RATIO', 'TOT_STR'):
+    elif m_upper in ('STUDENT_TEACHER_RATIO', 'TOT_STR', 'STR'):
         sort_metric = 'student_teacher_ratio'
     else:
         sort_metric = 'total_revenue'

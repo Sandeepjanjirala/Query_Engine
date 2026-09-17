@@ -15,6 +15,11 @@ from .orchestrator import (
     run_entity_summary,
     run_fee_books_not_purchased,
     run_fee_summary,
+    run_total_fee_due,
+    run_fee_due_student_count,
+    run_zero_paid_count,
+    run_zero_paid_fee_due,
+    run_fee_due_ranking,
     run_fee_yoy_comparison,
     run_filter_by_threshold,
     run_group_metric_aggregate,
@@ -53,9 +58,11 @@ from .orchestrator import (
     run_strength_difference_ranking,
     run_top_5_dropout,
     run_year_over_year_change_ranking,
+    run_multi_metric_query,
 )
 
 PREFUNCTIONS = {
+    'multi_metric_analysis': run_multi_metric_query,
     'top_5_dropout_branches': run_top_5_dropout,
     'rank_branches_by_metric': run_rank_branches_by_metric,
     'branch_metric_lookup': run_branch_metric_lookup,
@@ -120,6 +127,42 @@ def _safe_branch_names():
     return df[BRANCH_COLUMN].dropna().unique() if BRANCH_COLUMN in df.columns else []
 
 
+_BRANCH_STOP_WORDS = {
+    'show', 'the', 'a', 'an', 'for', 'of', 'in', 'at', 'about', 'is', 'are', 'what', 'which',
+    'top', 'bottom', 'each', 'every', 'all', 'any', 'per', 'by', 'this', 'that', 'our', 'my',
+    'highest', 'lowest', 'fewest', 'most', 'best', 'worst', 'rank', 'ranking',
+    'dropout', 'dropouts', 'percentage', 'fee', 'due', 'feedue', 'salary', 'revenue',
+    'ratio', 'strength', 'staff', 'student', 'students', 'teacher', 'teachers', 'room', 'rooms',
+    'section', 'sections', 'statistics', 'stats', 'report', 'review', 'analysis', 'has', 'have', 'with',
+    'metric', 'metrics', 'scorecard', 'scorecards', 'data', 'details', 'detail'
+}
+
+
+def _extract_unknown_branch_candidate(question: str) -> str | None:
+    q = question.lower()
+    if any(k in q for k in (
+        'which branch', 'what branch', 'all branch', 'every branch', 'per branch',
+        'by branch', 'across branch', 'this branch', 'that branch', 'branch wise', 'branch-wise'
+    )):
+        return None
+    if any(k in q for k in (
+        'top branch', 'bottom branch', 'highest branch', 'lowest branch', 'fewest branch',
+        'top 5', 'top 10', 'top five', 'top ten', 'branches with highest', 'branches with lowest',
+        'branches having highest', 'branches having lowest'
+    )):
+        return None
+    m = re.search(r'\b([A-Za-z0-9\.\'\-]+(?:\s+[A-Za-z0-9\.\'\-]+){0,2})\s+branch\b', question, flags=re.IGNORECASE)
+    if not m:
+        m = re.search(r'\bbranch\s+([A-Za-z0-9\.\'\-]+(?:\s+[A-Za-z0-9\.\'\-]+){0,2})\b', question, flags=re.IGNORECASE)
+    if m:
+        cand = m.group(1).strip()
+        cand_words = [w for w in cand.split() if w.lower() not in _BRANCH_STOP_WORDS]
+        cand_clean = ' '.join(cand_words)
+        if cand_clean and not cand_clean.isdigit():
+            return cand_clean
+    return None
+
+
 def _merge_text_entities(question: str, context: dict | None) -> dict:
     merged = dict(context or {})
     try:
@@ -128,9 +171,9 @@ def _merge_text_entities(question: str, context: dict | None) -> dict:
         return merged
 
     q_low = question.lower()
-    is_ri = ('ri ' in q_low or q_low.startswith('ri ')) and not any(k in q_low for k in ('which ri', 'what ri', 'per ri', 'by ri', 'across ri', 'each ri'))
-    is_agm = ('agm ' in q_low or q_low.startswith('agm ')) and not any(k in q_low for k in ('which agm', 'what agm', 'per agm', 'by agm', 'across agm', 'each agm'))
-    is_branch = ('branch ' in q_low or q_low.startswith('branch ')) and not any(k in q_low for k in ('which branch', 'what branch', 'per branch', 'by branch', 'across branch'))
+    is_ri = ('ri ' in q_low or q_low.startswith('ri ')) and not any(k in q_low for k in ('which ri', 'what ri', 'per ri', 'by ri', 'across ri', 'each ri', 'ri wise', 'ri-wise'))
+    is_agm = ('agm ' in q_low or q_low.startswith('agm ')) and not any(k in q_low for k in ('which agm', 'what agm', 'per agm', 'by agm', 'across agm', 'each agm', 'agm wise', 'agm-wise'))
+    is_branch = ('branch ' in q_low or q_low.startswith('branch ')) and not any(k in q_low for k in ('which branch', 'what branch', 'per branch', 'by branch', 'across branch', 'branch wise', 'branch-wise'))
 
     q_branches = p.extract_known_values(question, df[BRANCH_COLUMN].dropna().unique(), 'branch') if BRANCH_COLUMN in df.columns else []
     q_zones = p.extract_known_values(question, df[ZONE_COLUMN].dropna().unique(), 'zone') if ZONE_COLUMN in df.columns else []
@@ -138,37 +181,52 @@ def _merge_text_entities(question: str, context: dict | None) -> dict:
     q_ris = p.extract_known_values(question, df[RI_COLUMN].dropna().unique(), 'ri') if RI_COLUMN in df.columns else []
 
     # Filter out false positive branch match if name is explicitly used as a Zone (e.g. "Kompally zone")
-    if q_zones and q_branches:
-        for z_val in list(q_zones):
-            if z_val in q_branches and (f"{z_val.lower()} zone" in q_low or f"zone {z_val.lower()}" in q_low or "zone" in q_low):
-                q_branches.remove(z_val)
+    # or as RI / AGM
+    if q_branches:
+        q_branches = [
+            b for b in q_branches
+            if not (
+                (q_zones and any(str(b).lower() == str(z).lower() and (re.search(r'\bzone\s+' + re.escape(str(z).lower()), q_low) or re.search(re.escape(str(z).lower()) + r'\s+zone\b', q_low)) for z in q_zones))
+                or (q_ris and any(str(b).lower() == str(r).lower() and (re.search(r'\bri\s+' + re.escape(str(r).lower()), q_low) or re.search(re.escape(str(r).lower()) + r'\s+ri\b', q_low)) for r in q_ris))
+                or (q_agms and any(str(b).lower() == str(a).lower() and (re.search(r'\bagm\s+' + re.escape(str(a).lower()), q_low) or re.search(re.escape(str(a).lower()) + r'\s+agm\b', q_low)) for a in q_agms))
+            )
+        ]
 
-    is_asking_which_ri = any(k in q_low for k in ('which ri', 'what ri', 'per ri', 'by ri', 'across ri', 'each ri'))
+    is_asking_which_ri = any(k in q_low for k in ('which ri', 'what ri', 'per ri', 'by ri', 'across ri', 'each ri', 'ri wise', 'ri-wise'))
+    is_asking_which_agm = any(k in q_low for k in ('which agm', 'what agm', 'per agm', 'by agm', 'across agm', 'each agm', 'agm wise', 'agm-wise'))
     ri_val = None
     agm_val = q_agms[0] if q_agms else None
 
-    # 1. AGM Extraction
-    if not agm_val and is_agm:
-        m_agm = re.search(
-            r'\bagm\s+([A-Za-z0-9\.\s]+?)(?:\s+(?:which|what|where|how|who|has|have|with|for|in|under|dropout|drop\s*outs?|statistics|stats|fee|due|feedue|revenue|salary|teacher|student|ratio|str|report|review|top|branches)|$)',
-            question,
-            flags=re.IGNORECASE,
-        )
-        if m_agm:
-            raw_agm = m_agm.group(1).strip()
-            agm_val = p.resolve_single_entity(raw_agm, df[AGM_COLUMN].dropna().unique(), 'agm') if AGM_COLUMN in df.columns else raw_agm
-            if not agm_val and raw_agm:
-                agm_val = raw_agm
+    # 1. AGM Extraction (ignore AGM candidates if query is asking "which AGMs" or "AGM wise")
+    if not is_asking_which_agm:
+        agm_val = q_agms[0] if q_agms else None
+        if not agm_val and is_agm:
+            m_agm = re.search(
+                r'\bagm\s+([A-Za-z0-9\.\s]+?)(?:\s+(?:which|what|where|how|who|has|have|with|for|in|under|dropout|drop\s*outs?|statistics|stats|fee|due|feedue|revenue|salary|teacher|student|ratio|str|report|review|top|branches)|$)',
+                question,
+                flags=re.IGNORECASE,
+            )
+            if m_agm:
+                raw_agm = m_agm.group(1).strip()
+                if any(w in raw_agm.lower() for w in ('wise', 'all', 'any', 'each', 'every', 'top', 'bottom')):
+                    raw_agm = None
+                if raw_agm:
+                    agm_val = p.resolve_single_entity(raw_agm, df[AGM_COLUMN].dropna().unique(), 'agm') if AGM_COLUMN in df.columns else raw_agm
+                    if not agm_val and raw_agm:
+                        if not any(w in raw_agm.lower() for w in ('wise', 'all', 'any', 'each', 'every', 'what', 'which', 'who', 'dropout', 'fee', 'salary', 'revenue', 'teacher', 'student', 'ratio')):
+                            agm_val = raw_agm
+    else:
+        agm_val = None
     if agm_val:
         merged['agm'] = agm_val
         if not q_branches:
             merged['branches'] = ['All']
         if not q_zones:
             merged['zone'] = 'All'
-        if not is_asking_which_ri:
+        if not q_ris:
             merged['ri'] = 'All'
 
-    # 2. RI Extraction (ignore RI candidates if query is asking "which RIs", or if candidate is part of AGM name)
+    # 2. RI Extraction (ignore RI candidates if query is asking "which RIs" or "RI wise", or if candidate is part of AGM name)
     if not is_asking_which_ri:
         valid_q_ris = [r for r in q_ris if not (agm_val and str(r).lower() in str(agm_val).lower())]
         ri_val = valid_q_ris[0] if valid_q_ris else None
@@ -180,9 +238,13 @@ def _merge_text_entities(question: str, context: dict | None) -> dict:
             )
             if m_ri:
                 raw_ri = m_ri.group(1).strip()
-                ri_val = p.resolve_single_entity(raw_ri, df[RI_COLUMN].dropna().unique(), 'ri') if RI_COLUMN in df.columns else raw_ri
-                if not ri_val and raw_ri:
-                    ri_val = raw_ri
+                if any(w in raw_ri.lower() for w in ('wise', 'all', 'any', 'each', 'every', 'top', 'bottom')):
+                    raw_ri = None
+                if raw_ri:
+                    ri_val = p.resolve_single_entity(raw_ri, df[RI_COLUMN].dropna().unique(), 'ri') if RI_COLUMN in df.columns else raw_ri
+                    if not ri_val and raw_ri:
+                        if not any(w in raw_ri.lower() for w in ('wise', 'all', 'any', 'each', 'every', 'what', 'which', 'who', 'dropout', 'fee', 'salary', 'revenue', 'teacher', 'student', 'ratio')):
+                            ri_val = raw_ri
     if ri_val:
         merged['ri'] = ri_val
         if not q_branches:
@@ -191,9 +253,17 @@ def _merge_text_entities(question: str, context: dict | None) -> dict:
             merged['zone'] = 'All'
 
     # 3. Branch Extraction
-    is_asking_which_branch = any(k in q_low for k in ('which branch', 'what branch', 'per branch', 'by branch', 'across branch'))
-    if q_branches and not is_asking_which_branch:
-        merged['branches'] = q_branches
+    is_asking_which_branch = any(k in q_low for k in ('which branch', 'what branch', 'per branch', 'by branch', 'across branch', 'branch wise', 'branch-wise'))
+    valid_q_branches = [
+        b for b in q_branches
+        if not (
+            (q_zones and any(str(b).lower() == str(z).lower() and (re.search(r'\bzone\s+' + re.escape(str(z).lower()), q_low) or re.search(re.escape(str(z).lower()) + r'\s+zone\b', q_low)) for z in q_zones))
+            or (q_ris and any(str(b).lower() == str(r).lower() and (re.search(r'\bri\s+' + re.escape(str(r).lower()), q_low) or re.search(re.escape(str(r).lower()) + r'\s+ri\b', q_low)) for r in q_ris))
+            or (q_agms and any(str(b).lower() == str(a).lower() and (re.search(r'\bagm\s+' + re.escape(str(a).lower()), q_low) or re.search(re.escape(str(a).lower()) + r'\s+agm\b', q_low)) for a in q_agms))
+        )
+    ]
+    if valid_q_branches and not is_asking_which_branch:
+        merged['branches'] = valid_q_branches
     elif is_branch and not is_asking_which_branch:
         m_br = re.search(
             r'\bbranch\s+([A-Za-z0-9\.\s]+?)(?:\s+(?:which|what|where|how|who|has|have|with|for|in|under|belong|belongs|dropout|drop\s*outs?|statistics|stats|fee|due|feedue|revenue|salary|teacher|student|ratio|str|report|review)|$)',
@@ -202,9 +272,12 @@ def _merge_text_entities(question: str, context: dict | None) -> dict:
         )
         if m_br:
             raw_br = m_br.group(1).strip()
-            br_val = p.resolve_single_entity(raw_br, df[BRANCH_COLUMN].dropna().unique(), 'branch') if BRANCH_COLUMN in df.columns else raw_br
-            if br_val:
-                merged['branches'] = [br_val]
+            if any(w in raw_br.lower() for w in ('wise', 'all', 'any', 'each', 'every', 'top', 'bottom')):
+                raw_br = None
+            if raw_br:
+                br_val = p.resolve_single_entity(raw_br, df[BRANCH_COLUMN].dropna().unique(), 'branch') if BRANCH_COLUMN in df.columns else raw_br
+                if br_val and not any(w in str(br_val).lower() for w in ('wise', 'all', 'any', 'each', 'every', 'what', 'which', 'who')):
+                    merged['branches'] = [br_val]
 
     # 4. Zone Extraction
     if q_zones:
@@ -227,6 +300,40 @@ def route_question(question: str):
     year = raw_year or 'CY'
     branch_entities = p.extract_known_values(q, _safe_branch_names())
     group_dimension = p.extract_group_dimension(q)
+    if branch_entities:
+        branch_entities = [
+            b for b in branch_entities
+            if not (
+                re.search(r'\bzone\s+' + re.escape(str(b).lower()), q)
+                or re.search(re.escape(str(b).lower()) + r'\s+zone\b', q)
+                or re.search(r'\bri\s+' + re.escape(str(b).lower()), q)
+                or re.search(re.escape(str(b).lower()) + r'\s+ri\b', q)
+                or re.search(r'\bagm\s+' + re.escape(str(b).lower()), q)
+                or re.search(re.escape(str(b).lower()) + r'\s+agm\b', q)
+            )
+        ]
+    elif not group_dimension:
+        cand_branch = _extract_unknown_branch_candidate(question)
+        if cand_branch:
+            cand_res = p.resolve_single_entity(cand_branch, _safe_branch_names(), 'branch')
+            if cand_res:
+                branch_entities = [cand_res]
+            else:
+                try:
+                    df_chk = get_dataframe()
+                    q_zones = p.extract_known_values(question, df_chk[ZONE_COLUMN].dropna().unique()) if ZONE_COLUMN in df_chk.columns else []
+                    q_ris = p.extract_known_values(question, df_chk[RI_COLUMN].dropna().unique()) if RI_COLUMN in df_chk.columns else []
+                    q_agms = p.extract_known_values(question, df_chk[AGM_COLUMN].dropna().unique()) if AGM_COLUMN in df_chk.columns else []
+                except Exception:
+                    q_zones, q_ris, q_agms = [], [], []
+                if not (q_zones or q_ris or q_agms):
+                    def _branch_not_found_handler(context):
+                        return {
+                            'function': 'entity_not_found',
+                            'answer': f"I couldn't find a matching branch for '{cand_branch}'. Please check the branch name and try again.",
+                            'data': [],
+                        }
+                    return _branch_not_found_handler
 
     def bound(fn, **extra_params):
         base_params = {
@@ -244,6 +351,26 @@ def route_question(question: str):
             return fn(base_params, _merge_text_entities(question, context))
 
         return handler
+
+    # -----------------------------------------------------------------------
+    # Multi-Metric Dedicated Routing (Plan-driven multi-column queries)
+    # -----------------------------------------------------------------------
+    from .multi_metric_engine import build_query_plan
+    is_rev_sal_domain_only = bool(re.search(r'\brevenue\s*(?:vs\.?|versus|verse)\s*salary\b', q)) and not any(
+        d in q for d in ('dropout', 'drop out', 'fee', 'str', 'teacher', 'staff', 'student strength')
+    )
+    if not is_rev_sal_domain_only and not p.is_yoy_question(q):
+        plan = build_query_plan(q)
+        if plan and len(plan.metrics) >= 2:
+            has_table_intent = (
+                plan.operation == 'ranking'
+                or bool(re.search(
+                    r'\b(?:wise|by\s+agm|by\s+ri|by\s+zone|by\s+branch|by\s+branches|by\s+ris|by\s+zones|by\s+agms|across\s+agms?|across\s+ris?|across\s+zones?|across\s+branches?)\b',
+                    q
+                ))
+            )
+            if has_table_intent:
+                return bound(run_multi_metric_query, plan=plan)
 
     # --- Original V1 intent: exact match back-compatibility ---
     dropout = any(term in q for term in ('dropout', 'drop out', 'drop-out', 'dropouts', 'dpp'))
@@ -269,6 +396,27 @@ def route_question(question: str):
     )
     if is_hierarchy_q:
         return bound(run_branch_hierarchy_lookup, branches=branch_entities)
+
+    # -----------------------------------------------------------------------
+    # Guard: Branch is the lowest hierarchy and has no child entities
+    # -----------------------------------------------------------------------
+    if branch_entities and (group_dimension in ('ri', 'zone', 'agm', 'branch') or any(k in q for k in ('which ri', 'which zone', 'which agm', 'which branch', 'which branches'))) and not is_hierarchy_q:
+        b_name = branch_entities[0]
+        if any(k in q for k in ('which ri', 'by ri')) or group_dimension == 'ri':
+            dim_label = 'RIs'
+        elif any(k in q for k in ('which zone', 'by zone')) or group_dimension == 'zone':
+            dim_label = 'Zones'
+        elif any(k in q for k in ('which agm', 'by agm')) or group_dimension == 'agm':
+            dim_label = 'AGMs'
+        else:
+            dim_label = 'branches'
+        def _invalid_branch_hierarchy_handler(context):
+            return {
+                'function': 'invalid_hierarchy',
+                'answer': f"'{b_name}' is an individual branch and does not have child {dim_label}. Branches only have branch-level metrics and school levels (PP, PS, HS).",
+                'data': [],
+            }
+        return _invalid_branch_hierarchy_handler
 
     # -----------------------------------------------------------------------
     # Multi-Statistics Dedicated Routing (2 or more distinct statistics requested)
@@ -354,14 +502,32 @@ def route_question(question: str):
             'CY_ZP', 'CY_ZP_FD', 'CY_A_ZP',
         ) else 'CY_A_FD'
         ascending = p.extract_direction(q) == 'asc'
-        return bound(
-            run_fee_summary,
-            sort_col=sort_col,
-            n=p.extract_n(q),
-            ascending=ascending,
-            branches=branch_entities or None,
-            group_dim=group_dimension,
-        )
+        is_ranking = p.has_ranking_language(q) or any(k in q for k in (
+            'highest', 'lowest', 'top', 'bottom', 'rank', 'which branches', 'which branch',
+            'show branches', 'branches by', 'by branch', 'branch-wise', 'branch wise'
+        ))
+        explicit_n = p.extract_explicit_n(q)
+
+        # Semantic operation dispatch:
+        if is_ranking or group_dimension or explicit_n is not None or any(k in q for k in ('by branch', 'branch-wise', 'branch wise', 'branches by', 'show branches')):
+            n_val = explicit_n if explicit_n is not None else (5 if is_ranking else None)
+            return bound(
+                run_fee_due_ranking,
+                sort_col=sort_col,
+                n=n_val,
+                ascending=ascending,
+                branches=branch_entities or None,
+                group_dim=group_dimension,
+            )
+        else:
+            if sort_col in ('CY_ZP', 'CY_A_ZP'):
+                return bound(run_zero_paid_count, metric='CY_ZP')
+            elif sort_col == 'CY_ZP_FD':
+                return bound(run_zero_paid_fee_due, metric='CY_ZP_FD')
+            elif sort_col in ('CY_A_FDC', 'LY_FDC'):
+                return bound(run_fee_due_student_count, metric=sort_col, year=p.extract_year(q) or 'CY')
+            else:
+                return bound(run_total_fee_due, metric=sort_col, year=p.extract_year(q) or 'CY')
 
     # -----------------------------------------------------------------------
     # 0.5) Revenue vs Salary dedicated routing
@@ -375,8 +541,16 @@ def route_question(question: str):
         'upper primary', 'pre primary', 'high school', 'ad_ac', 'lps', 'ups',
         'employee count', 'total employee', 'employees', 'total student count',
     ))
-
     if _is_rev_sal_q:
+        if p.is_yoy_question(q) or any(w in q for w in ('last year', 'previous year', 'prior year')) or bool(re.search(r'\bly\b', q)):
+            def _rev_sal_no_ly_handler(context):
+                return {
+                    'function': 'revenue_salary_historical_unavailable',
+                    'answer': "Revenue and Salary datasets only track Current Year (2025-26) data. Historical last-year comparison is not available in the source data.",
+                    'data': [],
+                }
+            return _rev_sal_no_ly_handler
+
         # Dedicated Revenue vs Salary Statistics Review (AGM, RI, Branch)
         if any(t in q for t in ('statistics', 'statistic', 'stats', 'report', 'review', 'analysis', 'overview', 'details', 'summary')) or q in ('revenue statistics', 'salary statistics', 'revenue vs salary statistics'):
             try:
@@ -409,7 +583,7 @@ def route_question(question: str):
                 pass
         # Threshold queries
         thresh = p.extract_threshold(q)
-        if thresh is not None or any(t in q for t in ('greater than', 'more than', 'exceeding', 'above', 'below', 'less than', 'under', 'crore', 'lakh')):
+        if thresh is not None or any(t in q for t in ('greater than', 'more than', 'exceeding', 'above', 'below', 'less than')) or ('crore' in q or 'lakh' in q):
             op = thresh[0] if thresh else ('>' if any(t in q for t in ('greater', 'more', 'exceeding', 'above', 'crore', 'lakh')) else '<')
             val = thresh[1] if thresh else 10000000.0
             if thresh is None:
@@ -626,32 +800,21 @@ def route_question(question: str):
         return bound(run_branch_metric_lookup, metrics=multi_metrics, branches=branch_entities)
 
     # 6) Single branch specific metric lookup (Q33-Q42) - takes precedence over YoY if specific branch entity is named and no YoY explicit phrasing
-    if branch_entities and metric and not p.has_ranking_language(q) and not any(
+    if branch_entities and metric and not group_dimension and not p.has_ranking_language(q) and not any(
         ph in q for ph in ('compared with', 'compared to', 'from ly to cy', 'than last year', 'vs last year')
     ):
         return bound(run_branch_metric_lookup, metrics=[metric], branches=branch_entities)
 
     # 7) Dimension Comparisons
-    # 7a) Room comparison (Occupied vs Empty) (Q142, Q143)
-    if p.is_room_comparison(q):
-        return bound(run_compare_dimensions, dimension_type='rooms', group_dimension=group_dimension)
-
-    # 7b) Group YoY comparison (e.g. CY vs LY staff count by RI) (Q148)
-    if p.is_yoy_question(q) and group_dimension:
-        return bound(
-            run_compare_dimensions,
-            dimension_type='group_yoy',
-            group_dimension=group_dimension,
-            metric=metric or 'SC',
-        )
-
-    # 7c) Level comparison (PP vs PS vs HS) (Q101-Q115)
+    # 7a) Level comparison (PP vs PS vs HS) (Q101-Q115, and school level questions)
     if p.is_level_comparison(q):
-        top = 'highest' if any(w in q for w in ('highest', 'most', 'more')) else (
-            'lowest' if any(w in q for w in ('lowest', 'least', 'fewest')) else None
+        is_increase = any(w in q for w in ('increase', 'increased', 'worsened', 'growth', 'gain', 'biggest increase', 'highest increase'))
+        is_decrease = any(w in q for w in ('decrease', 'decreased', 'reduction', 'reduced', 'biggest decrease', 'lowest increase', 'drop in'))
+        top = 'highest' if any(w in q for w in ('highest', 'most', 'more')) and not is_increase else (
+            'lowest' if any(w in q for w in ('lowest', 'least', 'fewest')) and not is_decrease else None
         )
-        direction = 'positive' if 'improved' in q else ('negative' if 'declined' in q else None)
-        yoy_year = 'yoy' if ('cy vs ly' in q or 'compared with last year' in q or direction) else (
+        direction = 'positive' if 'improved' in q else ('negative' if ('declined' in q or is_increase) else None)
+        yoy_year = 'yoy' if ('cy vs ly' in q or 'compared with last year' in q or direction or is_increase or is_decrease) else (
             p.extract_year(q) or 'CY'
         )
         return bound(
@@ -663,22 +826,36 @@ def route_question(question: str):
             year=yoy_year,
         )
 
+    # 7b) Room comparison (Occupied vs Empty) (Q142, Q143)
+    if p.is_room_comparison(q):
+        return bound(run_compare_dimensions, dimension_type='rooms', group_dimension=group_dimension)
+
+    # 7c) Group YoY comparison (e.g. CY vs LY staff count by RI) (Q148)
+    if p.is_yoy_question(q) and group_dimension in ('ri', 'agm', 'zone', 'branch'):
+        return bound(
+            run_compare_dimensions,
+            dimension_type='group_yoy',
+            group_dimension=group_dimension,
+            metric=metric or 'SC',
+        )
+
     # 7d) Admission type comparison (Existing vs New) (Q116-Q130)
     if p.is_type_comparison(q):
         top = 'highest' if any(w in q for w in ('highest', 'higher', 'more')) else (
             'lowest' if any(w in q for w in ('lowest', 'lower', 'less')) else None
         )
-        has_both = 'existing' in q and 'new' in q
-        return bound(
-            run_compare_dimensions,
-            dimension_type='type',
-            metric=metric or 'DPP',
-            group_dimension=group_dimension,
-            top=top,
-            level=level,
-            year=p.extract_year(q) or 'CY',
-            has_both_types=has_both,
-        )
+        has_both = ('existing' in q and 'new' in q) or 'existing vs new' in q or 'existing and new' in q or 'compare' in q or 'between' in q
+        if has_both or not group_dimension:
+            return bound(
+                run_compare_dimensions,
+                dimension_type='type',
+                metric=metric or 'DPP',
+                group_dimension=group_dimension,
+                top=top,
+                level=level,
+                year=p.extract_year(q) or 'CY',
+                has_both_types=has_both,
+            )
 
     # 8) Year-over-Year change / comparison intent (CY vs LY) (Q66-Q85, Q149)
     if p.is_yoy_question(q):
@@ -737,7 +914,7 @@ def route_question(question: str):
 
     # 15) Generic top/bottom-N branch ranking by metric or single metric lookup
     if metric:
-        if p.has_ranking_language(q) or branch or 'fewest' in q or 'under' in q or 'within' in q or 'in ' in q or 'which branches' in q or 'which branch' in q:
+        if p.has_ranking_language(q) or 'branches' in q or 'by branch' in q or 'per branch' in q or 'branch-wise' in q or 'branch wise' in q or 'fewest' in q or 'which branch' in q or 'which branches' in q:
             explicit_n = p.extract_explicit_n(q)
             if explicit_n is None and any(term in q for term in ('top branches', 'top five branches', 'top 5', 'top five')):
                 explicit_n = 5

@@ -310,6 +310,7 @@ def build_ranking_analysis(
     operation: str = 'ranking',
     context: Optional[Dict[str, Any]] = None,
     is_fallback: bool = False,
+    direction: Optional[str] = None,
 ) -> AnalysisResult:
     """Ranked evidence table + terminology-correct summary sentence (Highest/Worst vs Top Performer; Lowest)."""
     registry = get_default_metric_registry()
@@ -333,7 +334,14 @@ def build_ranking_analysis(
         )
 
     # Determine heading terminology
-    if kpi_dir == 'negative':
+    if operation == 'yoy':
+        if direction == 'negative':
+            heading_title = f"Branches with Biggest Improvement in {metric_label}" if kpi_dir == 'negative' else f"Branches with Largest Decline in {metric_label}"
+        elif direction == 'positive':
+            heading_title = f"Branches with Largest Increase in {metric_label}" if kpi_dir == 'negative' else f"Top Performing Branches by {metric_label} Growth"
+        else:
+            heading_title = f"Branches by {metric_label} Change"
+    elif kpi_dir == 'negative':
         heading_title = f"Lowest {metric_label} Branches" if ascending else f"Highest {metric_label} Branches"
     else:
         heading_title = f"Lowest Performing Branches by {metric_label}" if ascending else f"Top Performing Branches by {metric_label}"
@@ -375,7 +383,16 @@ def build_ranking_analysis(
         target_scope = scope_str if scope_str else " in this scope"
         fallback_prefix = f"No branches{target_scope} are above the 10% dropout threshold. Showing all branches for completeness.\n\n"
 
-    if kpi_dir == 'negative':
+    if operation == 'yoy':
+        top_diff = rows[0][4]
+        if direction == 'negative':
+            summary_label = "Biggest improvement" if kpi_dir == 'negative' else "Largest decline"
+        elif direction == 'positive':
+            summary_label = "Largest increase" if kpi_dir == 'negative' else "Largest gain"
+        else:
+            summary_label = "Largest change"
+        summary_sentence = f"**{heading_title}**: {summary_label}{scope_str} is **{top_entity}** (Change: {top_diff}, Current: {top_val})."
+    elif kpi_dir == 'negative':
         term = "Lowest" if ascending else "Highest"
         summary_sentence = f"{fallback_prefix}**{heading_title}**: {term} branch{scope_str} is **{top_entity}** ({top_val})."
     else:
@@ -1021,7 +1038,7 @@ def build_agm_analysis(df: pd.DataFrame, agm_name: str, context: Optional[Dict[s
         "\n".join(zone_table_lines) +
         f"\n\n**{worsened_zones_cnt} of {n_zones} zones became worse.**\n\n"
         f"* **Highest dropout zone:** {highest_zone['name']} ({highest_zone['cy_dpp']:.2f}%)\n"
-        f"* **Biggest worsening zone:** {worst_worsened_zone['name']} (+{worst_worsened_zone['diff']:.2f} percentage points)\n"
+        f"* **Zone with biggest increase in dropouts:** {worst_worsened_zone['name']} (+{worst_worsened_zone['diff']:.2f} percentage points)\n"
         f"* **Biggest improvement zone:** {best_improved_zone['name']} ({'' if best_improved_zone['diff'] < 0 else '+'}{best_improved_zone['diff']:.2f} percentage points)"
     )
 
@@ -1066,7 +1083,7 @@ def build_agm_analysis(df: pd.DataFrame, agm_name: str, context: Optional[Dict[s
     sec6_content = (
         "\n".join(ri_table_lines) +
         f"\n\n* **Highest dropout RI:** {highest_ri['name']} ({highest_ri['cy_dpp']:.2f}%)\n"
-        f"* **Biggest worsening RI:** {worst_worsened_ri['name']} (+{worst_worsened_ri['diff']:.2f} percentage points)\n"
+        f"* **RI with biggest increase in dropouts:** {worst_worsened_ri['name']} (+{worst_worsened_ri['diff']:.2f} percentage points)\n"
         f"* **Biggest improvement RI:** {best_improved_ri['name']} ({'' if best_improved_ri['diff'] < 0 else '+'}{best_improved_ri['diff']:.2f} percentage points)"
     )
 
@@ -1190,13 +1207,13 @@ def build_agm_analysis(df: pd.DataFrame, agm_name: str, context: Optional[Dict[s
     sec10_lines = ["Prioritized management action areas:\n"]
     if p1_list:
         p1_str = ", ".join([f"**{b['branch']}** ({b['cy_dpp']:.2f}%, +{b['diff']:.2f} pp)" for b in p1_list[:3]])
-        sec10_lines.append(f"1. 🔴 **High risk + worsening:** {p1_str} — Priority intervention required.")
+        sec10_lines.append(f"1. 🔴 **High risk + became worse:** {p1_str} — Priority action required.")
     if p2_list:
         p2_str = ", ".join([f"**{b['branch']}** ({b['cy_dpp']:.2f}%, {b['diff']:.2f} pp)" for b in p2_list[:3]])
         sec10_lines.append(f"2. 🟠 **High risk + improving:** {p2_str} — High risk, but progress is being made.")
     if p3_list:
         p3_str = ", ".join([f"**{b['branch']}** ({b['cy_dpp']:.2f}%, +{b['diff']:.2f} pp)" for b in p3_list[:3]])
-        sec10_lines.append(f"3. ⚠️ **Below 10% but rapidly worsening:** {p3_str} — Early warning alert.")
+        sec10_lines.append(f"3. ⚠️ **Below 10% but rapidly increasing:** {p3_str} — Early warning alert.")
     if p4_list:
         p4_str = ", ".join([f"**{b['branch']}** ({b['cy_dpp']:.2f}%, {b['diff']:.2f} pp)" for b in p4_list[:3]])
         sec10_lines.append(f"4. 🟢 **Strongest improvement:** {p4_str} — Positive model branches.")
@@ -1206,14 +1223,14 @@ def build_agm_analysis(df: pd.DataFrame, agm_name: str, context: Optional[Dict[s
     # 11. Overall Conclusion
     sec11_lines = [f"**AGM {agm_last_name}'s overall dropout situation needs attention.**\n"]
     if p1_list:
-        sec11_lines.append(f"The highest priority concern is **{p1_list[0]['branch']}**, which is above the 10% risk level and continuing to deteriorate.")
+        sec11_lines.append(f"The highest priority concern is **{p1_list[0]['branch']}**, which is above the 10% risk level and became worse.")
     elif high_risk_branches:
         sec11_lines.append(f"The highest risk branch is **{high_risk_branches[0]['branch']}** at {high_risk_branches[0]['cy_dpp']:.2f}%.")
 
     if biggest_increase_b:
-        sec11_lines.append(f"The second concern is **{biggest_increase_b['branch']}**, which showed the fastest deterioration (+{biggest_increase_b['diff']:.2f} percentage points) across the AGM portfolio.")
+        sec11_lines.append(f"The second concern is **{biggest_increase_b['branch']}**, which showed the biggest increase (+{biggest_increase_b['diff']:.2f} percentage points) across the AGM's branches.")
 
-    sec11_lines.append(f"Overall, **{worsened_cnt} out of {n_branches} branches have worsened**, indicating that operational focus is needed across multiple zones.")
+    sec11_lines.append(f"Overall, **{worsened_cnt} out of {n_branches} branches became worse**, indicating that operational focus is needed across multiple zones.")
 
     if p4_list:
         sec11_lines.append(f"On the positive side, **{p4_list[0]['branch']}** demonstrated strong improvement ({p4_list[0]['diff']:.2f} percentage points).")
